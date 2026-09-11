@@ -140,6 +140,7 @@ import type { ServerEvent } from "./api/types.js";
 import { meRoutes } from "./http/routes/me.js";
 import { eventsRoutes, userChannelKey } from "./http/routes/events.js";
 import { projectsRoutes } from "./http/routes/projects.js";
+import { commonRoutes } from "./http/routes/common.js";
 import { membersRoutes } from "./http/routes/members.js";
 import { modelsRoutes } from "./http/routes/models.js";
 import { modelOAuthCallbackRoutes, modelOAuthRoutes } from "./http/routes/model-oauth.js";
@@ -887,7 +888,11 @@ export function buildAppDeps(
   };
   const schedulesRepo = new SchedulesRepo(db);
 
-  const projectConfigService = new ProjectConfigService(config.root);
+  // The common configuration scope is disabled while a real Project carries its reserved id
+  // (see ProjectService.isCommonScopeBlocked); the predicate is evaluated per call, so renaming
+  // that Project turns the scope on without a restart.
+  const isCommonScopeBlocked: () => boolean = () => projectService.isCommonScopeBlocked();
+  const projectConfigService = new ProjectConfigService(config.root, isCommonScopeBlocked);
   // Per-App like the preview signer above: a flow holds a PKCE verifier and nothing durable,
   // so a push or a restart costs the user one re-authorization and leaks nothing.
   const modelOAuth = new ModelOAuthService({
@@ -896,7 +901,13 @@ export function buildAppDeps(
   });
   const agentConfigService = new AgentConfigService(config.root);
   const snapshots = new SnapshotService(config.root);
-  const agentService = new AgentService(config.root, agentsRepo, agentConfigService, snapshots);
+  const agentService = new AgentService(
+    config.root,
+    agentsRepo,
+    agentConfigService,
+    snapshots,
+    isCommonScopeBlocked,
+  );
   const memoryService = new MemoryService(config.root, agentConfigService);
   // Session-origin registry: session_meta is the single source of truth (no DB column);
   // shared by the manager (subagent registration), the loader (self-heal rebuild),
@@ -1062,6 +1073,7 @@ export function buildAppDeps(
     sessions: sessionsRepo,
     manager,
     projectConfig: projectConfigService,
+    isCommonScopeBlocked,
     sources: sessionSources,
     traceIndex,
     proxyEnv,
@@ -1256,6 +1268,10 @@ export function createApp(
   app.route("/api/events", eventsRoutes(deps));
   // Plugin library listing: readable once logged in, not nested under a Project prefix.
   app.route("/api/plugins", pluginLibraryRoutes());
+  // Common configuration scope: only the default plugin set needs a home of its own — the
+  // scope's models and Agent templates ride the ordinary Project routes under the reserved
+  // `common` id (see core's COMMON_SCOPE_ID and routes/common.ts).
+  app.route("/api/common", commonRoutes(deps));
   app.route("/api/projects/:projectId/machines", machinesRoutes(deps));
   app.route("/api/projects", projectsRoutes(deps));
   app.route("/api/projects/:projectId/members", membersRoutes(deps));

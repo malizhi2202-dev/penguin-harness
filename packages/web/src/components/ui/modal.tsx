@@ -32,8 +32,6 @@ export interface ModalProps {
   widthClass?: string;
   /** No header bar (no visible title, no close button): compact dialogs like confirmations — the title still names the dialog for assistive tech. */
   headerless?: boolean;
-  /** Render children full-bleed: no built-in padding or 70vh scroller. For dialogs that own their inner layout and scroll regions (PagedDialog); the caller then also owns a close control. */
-  bare?: boolean;
 }
 
 /**
@@ -94,7 +92,6 @@ export function Modal({
   footer,
   widthClass,
   headerless,
-  bare,
 }: ModalProps) {
   // Latest-callback ref, so the effect below re-runs ONLY on open/close: call sites pass an
   // inline arrow for onClose, and re-running on its identity would pop and re-push this
@@ -203,7 +200,7 @@ export function Modal({
             <CloseButton onClose={onClose} />
           </div>
         )}
-        {bare ? children : <div className="max-h-[70vh] overflow-y-auto px-4 py-4">{children}</div>}
+        <div className="max-h-[70vh] overflow-y-auto px-4 py-4">{children}</div>
         {footer && (
           <div className="flex justify-end gap-2 border-t border-gray-200 px-4 py-3 dark:border-gray-800">
             {footer}

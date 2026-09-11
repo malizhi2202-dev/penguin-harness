@@ -17,6 +17,9 @@ import {
   agentDir,
   agentsDir,
   agentsMdPath,
+  COMMON_SCOPE_ID,
+  copyAgentStateFrom,
+  loadCommonDefaultPlugins,
   BUILTIN_AGENT_IDS,
   createAgent as coreCreateAgent,
   installPlugin,
@@ -31,6 +34,7 @@ import {
   comparePluginVersions,
   loadLibraryPlugins,
   parseSkillFrontmatter,
+  provisionProjectAgents,
 } from "@prismshadow/penguin-core";
 import type { LibraryPlugin } from "@prismshadow/penguin-core";
 import type { AgentsRepo } from "../db/repos/agents.js";
@@ -38,7 +42,7 @@ import { SEMANTIC_ID_PATTERN, SEMANTIC_ID_RULE } from "./ids.js";
 import type { AgentConfigService } from "./agent-config-service.js";
 import type { SnapshotService } from "./snapshot-service.js";
 import { isTopicFileName } from "./memory-service.js";
-import type { PluginUpdateRef } from "../api/types.js";
+import type { CommonAgentTemplateItem, PluginUpdateRef } from "../api/types.js";
 import { resolveLibraryPlugins } from "./plugin-library.js";
 import { resolveDirectorySkills } from "./directory-skills.js";
 
@@ -97,10 +101,17 @@ export class AgentService {
     private readonly agents: AgentsRepo,
     private readonly agentConfig: AgentConfigService,
     private readonly snapshots: SnapshotService,
+    /**
+     * Whether a real Project carries the reserved common-scope id, which disables the scope (see
+     * ProjectService.isCommonScopeBlocked). A predicate rather than a value: the answer changes
+     * while the server runs. Defaults to "never blocked".
+     */
+    private readonly isCommonScopeBlocked: () => boolean = () => false,
   ) {}
 
   /** Union of DB index ∪ directory scan; unmanaged directory Agents are backfilled into the DB. */
   async listAgents(projectId: string): Promise<AgentListItem[]> {
+    await this.ensureCommonScopeAgents(projectId);
     const known = new Map(this.agents.list(projectId).map((r) => [r.agentId, r]));
 
     let entries: string[] = [];
@@ -161,6 +172,53 @@ export class AgentService {
         };
       }),
     );
+  }
+
+  /**
+   * The common scope's Agent templates, as the create-Agent dialog needs them: identity plus
+   * what a copy would bring along. Served to any signed-in user (see routes/common.ts), so it
+   * carries nothing a member should not see — no config body, no Skill content, no credential.
+   *
+   * Not gated by Project access on purpose: the reserved scope resolves to admin-only through
+   * the ordinary Project routes, and this is the one read a non-admin legitimately needs in
+   * order to create an Agent from a template.
+   */
+  async listAgentTemplates(): Promise<CommonAgentTemplateItem[]> {
+    const agents = await this.listAgents(COMMON_SCOPE_ID);
+    return agents.map((agent) => ({
+      agentId: agent.agentId,
+      ...(agent.name !== undefined ? { name: agent.name } : {}),
+      ...(agent.description !== undefined ? { description: agent.description } : {}),
+      skillCount: agent.skillCount,
+      hookCount: agent.hookCount,
+    }));
+  }
+
+  /**
+   * The common configuration scope's Agents are templates, and the scope has no creation event to
+   * provision them at the way a Project does (`createProject` → `provisionBuiltinAgents`). So the
+   * first **read** of the scope provisions the same builtin General Agent a Project gets: the
+   * scope opens on an Agent an administrator can copy, edit or delete rather than on an empty
+   * list, and a Project's create dialog can offer it as a template from the moment the scope is
+   * used at all.
+   *
+   * Idempotent and cheap: it returns immediately unless the reserved id is being listed, the
+   * scope is available (a colliding Project owns the directory — see
+   * `ProjectService.isCommonScopeBlocked`) and the scope holds no Agent directory at all.
+   * `provisionProjectAgents` never overwrites an existing Agent, and only the builtin preset is
+   * written — nothing here reads or copies a Project's own Agents, and the vault, memory and
+   * schedules a Project's General Agent accumulates are not part of the preset. A data root
+   * nobody opens the scope in still gets no `common/` directory.
+   */
+  private async ensureCommonScopeAgents(projectId: string): Promise<void> {
+    if (projectId !== COMMON_SCOPE_ID || this.isCommonScopeBlocked()) return;
+    try {
+      const dirents = await fs.readdir(agentsDir(this.root, projectId), { withFileTypes: true });
+      if (dirents.some((d) => d.isDirectory() && isValidId(d.name))) return;
+    } catch {
+      // No agents/ directory yet: the case this provisions for.
+    }
+    await provisionProjectAgents({ root: this.root, projectId });
   }
 
   /** Number of vault keys (falls back to 0 on read failure). */
@@ -341,6 +399,7 @@ export class AgentService {
     pluginNames?: readonly string[],
     directory?: { path: string; names: readonly string[] },
     archive?: Buffer,
+    templateAgentId?: string,
   ): Promise<AgentListItem> {
     if (!SEMANTIC_ID_PATTERN.test(agentId)) {
       throw new HttpError(
@@ -349,7 +408,7 @@ export class AgentService {
         `Agent id must be 2–64 characters: ${SEMANTIC_ID_RULE}.`,
       );
     }
-    if (archive !== undefined && (pluginNames?.length || directory)) {
+    if (archive !== undefined && (pluginNames?.length || directory || templateAgentId)) {
       throw new HttpError(
         400,
         "snapshot_with_plugins",
@@ -366,12 +425,32 @@ export class AgentService {
       throw new HttpError(409, "agent_exists", `Agent id is already taken: ${agentId}.`);
     }
     const displayName = name ?? agentId;
+    // The template is resolved before anything is written (like the library and directory seeds
+    // below), so a template that has since been deleted fails as a clean 404 while the Agent still
+    // does not exist — instead of creating one and then failing halfway through the copy.
+    if (templateAgentId !== undefined) {
+      await this.agentConfig.requireExists(COMMON_SCOPE_ID, templateAgentId);
+    }
     // Both sources are resolved before a single file is written, so a name that has since left the
     // library or the directory fails while the Agent still does not exist. Directory Skills are
     // installed after the library plugins and so win a name collision: the user picked that
     // directory for this Agent specifically, which is a narrower intent than "install the
     // built-in one".
-    const librarySeed = resolveLibraryPlugins(pluginNames ?? []);
+    //
+    // The **common default plugin set** is what "picked nothing" means: an omitted `pluginNames`
+    // (the caller did not choose) with no template and no snapshot seeds the data root's default
+    // set, so the common scope configures once for every Agent created afterwards. An empty array
+    // is a choice — "no plugins for this one" — and stays empty, which is how the picker lets a
+    // user clear the pre-selected defaults. A template is already a complete description of an
+    // Agent, so it does not also collect the default set.
+    const commonDefaults =
+      pluginNames === undefined &&
+      archive === undefined &&
+      templateAgentId === undefined &&
+      !this.isCommonScopeBlocked()
+        ? await loadCommonDefaultPlugins(this.root)
+        : [];
+    const librarySeed = resolveLibraryPlugins(pluginNames ?? commonDefaults);
     const directorySeed = directory
       ? await resolveDirectorySkills(directory.path, directory.names)
       : [];
@@ -396,6 +475,21 @@ export class AgentService {
           });
         }
       } else {
+        if (templateAgentId !== undefined) {
+          // Copy the common template's *behavior* — config, prompt, Skills, hooks — into the fresh
+          // Agent (never its vault, memory or schedule: see copyAgentStateFrom). The copy is a copy:
+          // nothing links the two afterwards, and editing either is invisible to the other.
+          await copyAgentStateFrom({
+            root: this.root,
+            fromProjectId: COMMON_SCOPE_ID,
+            fromAgentId: templateAgentId,
+            toProjectId: projectId,
+            toAgentId: agentId,
+          });
+        }
+        // Identity is written after the copy so an explicit name/description wins over the
+        // template's, and an absent one falls back to the new Agent's id (not the template's name)
+        // — the template names *itself*, not the copy.
         await this.agentConfig.updateConfig(projectId, agentId, {
           config: { name: displayName, ...(description !== undefined ? { description } : {}) },
         });
@@ -421,7 +515,11 @@ export class AgentService {
     // skills, schedules and memory.
     const meta = await this.agentConfig.readCardMeta(projectId, agentId);
     const cardName = archive !== undefined ? (meta.name ?? agentId) : displayName;
-    const cardDescription = archive !== undefined ? meta.description : description;
+    // The request's description wins; an absent one falls back to what the file actually holds.
+    // That covers both seeds that bring their own: a snapshot package's description, and a common
+    // template's — the copy keeps the template's description when the caller gives none, and a card
+    // that reported nothing there would disagree with the Agent list one reload later.
+    const cardDescription = description ?? meta.description;
     const installed = await this.installedPlugins(projectId, agentId, loadLibraryPlugins());
     return {
       agentId,

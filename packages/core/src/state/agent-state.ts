@@ -243,6 +243,91 @@ export async function loadAgentState(opts?: {
 }
 
 /**
+ * `agent_state/` subdirectories that carry an Agent's **behavior** and are therefore copied by a
+ * template copy. The list is the boundary: anything not named here stays behind, which is what
+ * keeps secrets, personal memory and timed work out of a copy without a second rule to maintain.
+ */
+const TEMPLATE_COPY_DIRS = ["skills", "hooks", "tools"] as const;
+
+/**
+ * Copies one Agent's behavior into another Agent State directory — the step behind "create an
+ * Agent from a common template" (and usable for any Agent-to-Agent copy, since the rule is about
+ * Agent State, not about where it came from).
+ *
+ * **Copied**: `system_config.yaml` (prompt, runtime params, tool set, compaction, MCP servers),
+ * `AGENTS.md`, and the `skills/`, `hooks/`, `tools/` subdirectories.
+ *
+ * **Never copied**: `.vault.toml` (the source's secrets — a copy that silently inherits an API
+ * key or token is a leak, not a convenience), `memory/` (that Agent's own long-term memory, which
+ * is personal to it by definition), `schedule/` (timed work aimed at *that* Agent), and everything
+ * outside `agent_state/` (traces, scratchpad, workspaces, benchmarks, snapshots).
+ *
+ * The copy is a copy: nothing links the two Agents afterwards, and editing either one — config,
+ * prompt or an installed Skill — never reaches the other.
+ *
+ * The destination must already be initialized (`loadAgentState({init})`), which is what creates
+ * the directories this merges into. Callers that want their own name/description write them
+ * *after* this returns, since the copied config carries the template's.
+ *
+ * Throws when the source has no `system_config.yaml`: a directory without one is not an Agent,
+ * and copying "nothing" would produce a silent empty Agent instead of a reportable error.
+ */
+export async function copyAgentStateFrom(opts: {
+  root: string;
+  fromProjectId: string;
+  fromAgentId: string;
+  toProjectId: string;
+  toAgentId: string;
+}): Promise<void> {
+  const { root, fromProjectId, fromAgentId, toProjectId, toAgentId } = opts;
+  const fromState = agentStateDir(root, fromProjectId, fromAgentId);
+  const toState = agentStateDir(root, toProjectId, toAgentId);
+  const fromConfig = systemConfigPath(root, fromProjectId, fromAgentId);
+
+  let config: string;
+  try {
+    config = await fs.readFile(fromConfig, "utf8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      throw new Error(`The Agent being copied has no Agent State: ${fromConfig} does not exist.`);
+    }
+    throw err;
+  }
+
+  const agentsMd = await fs
+    .readFile(agentsMdPath(root, fromProjectId, fromAgentId), "utf8")
+    .catch(() => undefined);
+
+  // Behavior first, the config file last: it is the "initialization complete" marker everywhere
+  // else (see loadAgentState), so a copy interrupted partway is retried rather than mistaken for
+  // a finished template.
+  for (const sub of TEMPLATE_COPY_DIRS) {
+    const src = path.join(fromState, sub);
+    if (
+      !(await fs.stat(src).then(
+        () => true,
+        () => false,
+      ))
+    )
+      continue;
+    const dst = path.join(toState, sub);
+    await fs.mkdir(dst, { recursive: true });
+    // `fs.cp` merges into an existing directory and overwrites same-named files, so a Skill the
+    // template carries replaces the destination's stub of the same name — the template is the
+    // more specific intent, exactly as a directory Skill beats a library one at creation.
+    await fs.cp(src, dst, { recursive: true, force: true });
+  }
+  if (agentsMd !== undefined) {
+    await atomicWriteFile(agentsMdPath(root, toProjectId, toAgentId), agentsMd, {
+      followSymlinks: true,
+    });
+  }
+  await atomicWriteFile(systemConfigPath(root, toProjectId, toAgentId), config, {
+    followSymlinks: true,
+  });
+}
+
+/**
  * Initializes a Project's built-in Agent (the only built-in Agent: default_agent).
  *
  * Calls the init-enabled `loadAgentState` for each one: an Agent whose directory already

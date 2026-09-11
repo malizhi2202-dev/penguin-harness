@@ -9,6 +9,7 @@
  */
 import { Hono } from "hono";
 import type {
+  CommonModelImportResult,
   DefaultModelResponse,
   EndpointModelListRequest,
   ModelProtocolDetectRequest,
@@ -195,6 +196,23 @@ export function modelsRoutes(deps: AppDeps): Hono<AppEnv> {
     const res = await deps.projectConfigService.updateModels(projectId, req);
     modelConfigChanged(deps, projectId);
     return c.json(res);
+  });
+
+  // Copy the common configuration scope's Model table into this Project (owner): the manual
+  // counterpart of the copy a new Project is seeded with at creation, for models added to the
+  // common scope afterwards. Append-only and Project-first — see the service method for the
+  // exact rule — and never a push in the other direction.
+  app.post("/import-common", async (c) => {
+    const projectId = requireValidId(c, "projectId");
+    deps.projectService.requireProjectOwner(c.var.user.userId, projectId);
+    const result = await deps.projectConfigService.importCommonModels(projectId);
+    // Imported entries carry credentials, and a Session started on a registered machine reads
+    // that machine's copy of the table: the same sync the models PUT triggers applies here.
+    if (result.addedCount > 0) {
+      modelConfigChanged(deps, projectId);
+      void deps.machines.syncModelsEverywhere(projectId);
+    }
+    return c.json(result satisfies CommonModelImportResult);
   });
 
   // Narrow default-model switch (owner): flips the same top-level `default_model` the

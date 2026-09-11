@@ -1,6 +1,6 @@
 /**
  * Single-column sidebar, top to bottom:
- * Project switcher -> new chat (default_agent draft) + page nav (Agents → Evaluation Center,
+ * Project switcher (the real Projects) -> new chat (default_agent draft) + page nav (Agents → Evaluation Center,
  * one collapsible group behind a nav-row-wide chevron button under its last entry: arrow
  * up = click to collapse, arrow down while collapsed = the way back; state persists in
  * localStorage, the pinned new-chat block never collapses) -> Session area with three grouping
@@ -29,7 +29,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { DragEvent as ReactDragEvent, ReactNode } from "react";
-import { NavLink, useMatch, useNavigate } from "react-router";
+import { NavLink, useLocation, useMatch, useNavigate } from "react-router";
 import type {
   SessionCategory,
   SessionCategoryCounts,
@@ -162,7 +162,6 @@ import { CreateProjectDialog, ProjectSettingsDialog } from "./project-dialogs";
 import { UpdateRow } from "../account/update-row";
 import { openUpdateModal } from "../../lib/use-update-flow";
 import { navNoteFor, useUpdateBadges } from "../../lib/use-update-badges";
-import { SettingsDialog } from "../../features/settings/settings-dialog";
 import { ICON_SIZE } from "../../lib/icon-scale";
 
 /** New-chat pencil (the pinned "New chat" button and the collapsed rail share it). */
@@ -314,6 +313,8 @@ export function Sidebar({
   onCollapse?: () => void;
 }) {
   const navigate = useNavigate();
+  /** Which page the column is on: the common group marks its own row (the nav group below uses NavLink, whose active state would also light up for a Project context). */
+  const location = useLocation();
   const { user, logout, desktopMode, sessionVia } = useAuth();
   const { locale } = useLocale();
   const {
@@ -344,7 +345,6 @@ export function Sidebar({
   const [userOpen, setUserOpen] = useState(false);
   const [createProjectOpen, setCreateProjectOpen] = useState(false);
   const [projectSettingsOpen, setProjectSettingsOpen] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
   /** The badges over the update and to-do trails (use-update-badges.ts); the avatar's dot follows the update flow's offer / restart states. */
   const badges = useUpdateBadges();
   const currentProjectId = currentProject?.projectId ?? null;
@@ -1429,14 +1429,24 @@ export function Sidebar({
           ),
         );
 
-  /** Page entries of the collapsible nav group (智能体 → 评估中心, driven by the NAV_GROUP_KEYS manifest, minus the entries this user's role cannot reach). Always mounted — the collapse animates their height to zero and turns them inert. */
+  /**
+   * Page entries of the collapsible nav group (智能体 → 评估中心, driven by the NAV_GROUP_KEYS
+   * manifest, minus the entries this user's role cannot reach). Always mounted — the collapse
+   * animates their height to zero and turns them inert.
+   *
+   * The column shows the app's own scope and only that: the common configuration scope is
+   * configured inside System settings and is read there through its own pinned context, so it
+   * never becomes the app's scope and this nav never has a second form to render.
+   */
   const navItems: Array<{ to: string; label: string; icon: string }> = navKeysFor(
     user?.isAdmin === true,
   ).map((key) => ({ to: `/${key}`, label: S.nav[key], icon: NAV_ICONS[key] }));
 
   return (
     <div className="flex h-full w-full flex-col">
-      {/* Project switcher (+ collapse sidebar) */}
+      {/* Project switcher (+ collapse sidebar). Kept as it has always looked: the column's first
+          row and its only title-weight text. The common configuration scope is not one of the
+          Projects and is never the app's scope, so it has no row here (see navItems). */}
       <div className="flex shrink-0 items-center gap-1 px-2 pt-2">
         {onCollapse && (
           <button
@@ -1457,10 +1467,13 @@ export function Sidebar({
           button={
             <button
               type="button"
+              aria-expanded={projectOpen}
               onClick={() => setProjectOpen(!projectOpen)}
               className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-base font-semibold transition-colors duration-150 hover:bg-gray-200/70 dark:hover:bg-gray-800"
             >
               <span className="min-w-0 flex-1 truncate text-left">
+                {/* While the common scope is current this is the scope's own name (the store's
+                    synthetic summary), and the rows below stay the way back into a Project. */}
                 {currentProject ? projectDisplayName(currentProject) : S.common.loading}
               </span>
               <span className="text-gray-400">
@@ -1469,22 +1482,31 @@ export function Sidebar({
             </button>
           }
         >
-          {projects.map((p) => (
-            <button
-              key={p.projectId}
-              type="button"
-              onClick={() => {
-                setCurrentProjectId(p.projectId);
-                setProjectOpen(false);
-              }}
-              className={`flex w-full items-center justify-between gap-2 px-3.5 py-2 text-left text-sm transition-colors duration-150 hover:bg-gray-100 dark:hover:bg-gray-800 ${
-                p.projectId === currentProject?.projectId ? "font-semibold" : ""
-              }`}
-            >
-              <span className="truncate">{projectDisplayName(p)}</span>
-              <Badge tone="gray">{p.role}</Badge>
-            </button>
-          ))}
+          {projects.map((p) => {
+            const selected = p.projectId === currentProject?.projectId;
+            return (
+              <button
+                key={p.projectId}
+                type="button"
+                onClick={() => {
+                  setCurrentProjectId(p.projectId);
+                  setProjectOpen(false);
+                }}
+                className={`flex w-full items-center justify-between gap-2 px-3.5 py-2 text-left text-sm transition-colors duration-150 hover:bg-gray-100 dark:hover:bg-gray-800 ${
+                  selected ? "font-semibold" : ""
+                }`}
+              >
+                <span className="truncate">{projectDisplayName(p)}</span>
+                {/* Where you are is said once, by the check. A role is only news when it is not
+                    the owner's — every row of one's own list would otherwise carry a tag. */}
+                {selected ? (
+                  <CheckIcon className="shrink-0 text-gray-400" />
+                ) : p.role !== "owner" ? (
+                  <Badge tone="gray">{S.project.roleMember}</Badge>
+                ) : null}
+              </button>
+            );
+          })}
           <div className="mt-1.5 border-t border-gray-100 pt-1.5 dark:border-gray-800">
             <button
               type="button"
@@ -1578,6 +1600,8 @@ export function Sidebar({
                      label text (where it would float over whatever follows the word): at the
                      row's right edge, on the same inset as its horizontal padding, and vertically
                      centred on the row rather than on the line of text. */
+                  // The badge trail is this Project's own state (an outdated kernel, unchecked
+                  // skills/models, an unread cost report).
                   const note = navNoteFor(badges, item.to);
                   return (
                     <NavLink
@@ -1640,15 +1664,17 @@ export function Sidebar({
           </button>
         </nav>
 
+        {/* Everything below the page nav is about this Project's *conversations*: the list
+            header, parked drafts, the session groups and the folders under them. */}
         {/* Section header: list label + right-aligned controls (icon + tooltip family):
-            search, list settings (grouping + sort radios — the old inline grouping
-            toggle relocated into this menu), and the mode-dependent create button (the
-            created object follows the grouping mode). The search is a mac-style
-            IN-PLACE expansion — no extra row: the two grid columns tween (the 0fr/1fr
-            trick, horizontal), the label's column collapsing while the controls column
-            takes the full width and the field inside grows leftward over the label's
-            place; the magnifier morphs from toggle button into the field's leading
-            glyph. No ruled separator at this boundary — see the nav toggle above. */}
+          search, list settings (grouping + sort radios — the old inline grouping
+          toggle relocated into this menu), and the mode-dependent create button (the
+          created object follows the grouping mode). The search is a mac-style
+          IN-PLACE expansion — no extra row: the two grid columns tween (the 0fr/1fr
+          trick, horizontal), the label's column collapsing while the controls column
+          takes the full width and the field inside grows leftward over the label's
+          place; the magnifier morphs from toggle button into the field's leading
+          glyph. No ruled separator at this boundary — see the nav toggle above. */}
         <div
           className={`mt-3 grid items-center px-1 pt-2 transition-[grid-template-columns] duration-200 ease-out ${
             searchOpen ? "grid-cols-[0fr_1fr]" : "grid-cols-[1fr_1fr]"
@@ -1664,8 +1690,8 @@ export function Sidebar({
           <div className="flex min-w-0 items-center justify-end gap-0.5">
             {searchOpen ? (
               /* Expanded field: leading magnifier glyph + input + clear ×, one bordered
-                 box filling the row (its width rides the column tween). Esc and × both
-                 collapse it and drop the filter. */
+               box filling the row (its width rides the column tween). Esc and × both
+               collapse it and drop the filter. */
               <div className="flex h-6 min-w-0 flex-1 items-center gap-1 rounded-md border border-gray-300 bg-white px-1.5 transition-colors duration-150 focus-within:border-gray-400 dark:border-gray-700 dark:bg-gray-900 dark:focus-within:border-gray-500">
                 <span aria-hidden className="shrink-0 text-gray-400 dark:text-gray-500">
                   <Icon d={SEARCH_ICON} size={12} />
@@ -1778,13 +1804,13 @@ export function Sidebar({
               />
             </Dropdown>
             {/* Mode-dependent create — 具体新建的对象按分组方式决定, the icon following
-                suit (folder+ / robot+, a bottom-right plus badge on the entity's glyph):
-                agent grouping opens the Agents page's existing create dialog (route
-                state); workspace grouping opens the SAME directory-browse menu the
-                draft's workspace picker uses — the picked directory registers as a
-                workspace group immediately, Sessions or not. Time buckets are not
-                something to create into, so that mode starts a plain new conversation
-                and wears the compose glyph without a plus badge. */}
+              suit (folder+ / robot+, a bottom-right plus badge on the entity's glyph):
+              agent grouping opens the Agents page's existing create dialog (route
+              state); workspace grouping opens the SAME directory-browse menu the
+              draft's workspace picker uses — the picked directory registers as a
+              workspace group immediately, Sessions or not. Time buckets are not
+              something to create into, so that mode starts a plain new conversation
+              and wears the compose glyph without a plus badge. */}
             {newEntity === "agent" ? (
               <button
                 type="button"
@@ -1836,8 +1862,8 @@ export function Sidebar({
         </div>
 
         {/* Parked draft conversations (unsent new chats, newest first): pinned above both
-            grouping modes — they belong to no Agent or Workspace until sent. Hidden
-            entirely while there are none; the search filter applies to their titles too. */}
+          grouping modes — they belong to no Agent or Workspace until sent. Hidden
+          entirely while there are none; the search filter applies to their titles too. */}
         {shownDrafts.length > 0 && (
           <div className="pt-2.5">
             <GroupHeader
@@ -1963,9 +1989,9 @@ export function Sidebar({
             return (
               <GroupBlock key={group.key} dropEdge={drag.dropEdge}>
                 {/* Group header: collapse toggle (folder icon + directory basename + count, full
-                    path in the tooltip; the count = the group's active conversations only, exact
-                    server share, loaded rows win a disagreement — the folders never feed it) +
-                    pin + new chat in this Workspace; also the group's drag handle. */}
+                  path in the tooltip; the count = the group's active conversations only, exact
+                  server share, loaded rows win a disagreement — the folders never feed it) +
+                  pin + new chat in this Workspace; also the group's drag handle. */}
                 <GroupHeader
                   {...drag.header}
                   open={!collapsed}
@@ -2000,8 +2026,8 @@ export function Sidebar({
                         <Icon d="M12 5v14M5 12h14" size={ICON_SIZE.groupHeaderAction} />
                       </button>
                       {/* Manually-added (registry-backed) Workspaces only: rename-alias /
-                            remove-from-sidebar overflow, to the right of the "+" (session-
-                            derived groups have no registry entry for these to act on). */}
+                          remove-from-sidebar overflow, to the right of the "+" (session-
+                          derived groups have no registry entry for these to act on). */}
                       {registeredPaths.has(group.key) && (
                         <GroupOverflowMenu
                           onRename={() => openRenameWorkspace(group.key)}
@@ -2015,9 +2041,9 @@ export function Sidebar({
                 />
 
                 {/* A workspace group can span Agents: the group body fans folder loads and "More"
-                    out per category to the Agents whose share of THIS group is non-zero (plus the
-                    Agents already contributing loaded rows) — the active list and each folder
-                    page independently. */}
+                  out per category to the Agents whose share of THIS group is non-zero (plus the
+                  Agents already contributing loaded rows) — the active list and each folder
+                  page independently. */}
                 {collapsed
                   ? null
                   : renderGroupBody(group.key, parts, true, counts?.totals, agentsFor)}
@@ -2028,12 +2054,12 @@ export function Sidebar({
         {groupMode === "workspace" ? groupPagerRow() : null}
 
         {/* Time mode: last day / last month / earlier, bucketed on each conversation's last
-            activity — the same stamp the rows' compact timestamps and the recency sort read,
-            so a row can never sit under a bucket its own timestamp contradicts. Empty buckets
-            are dropped, and there are at most three, so this mode never paginates its groups.
-            The buckets span every Agent and every Workspace: a bucket's "More" only reveals
-            further loaded rows, while fetching the next page and reaching the Subagents /
-            Scheduled / Archived rows happen once for the whole Project, below. */}
+          activity — the same stamp the rows' compact timestamps and the recency sort read,
+          so a row can never sit under a bucket its own timestamp contradicts. Empty buckets
+          are dropped, and there are at most three, so this mode never paginates its groups.
+          The buckets span every Agent and every Workspace: a bucket's "More" only reveals
+          further loaded rows, while fetching the next page and reaching the Subagents /
+          Scheduled / Archived rows happen once for the whole Project, below. */}
         {groupMode !== "time" || timeParts === null ? null : loading && sessions.length === 0 ? (
           <SkeletonList rows={5} />
         ) : (
@@ -2068,7 +2094,7 @@ export function Sidebar({
             })}
 
             {/* Empty only when the shared folders below are empty too (renderGroupBody's own
-                rule): "no Sessions yet" over an "Archived (3)" row would contradict it. */}
+              rule): "no Sessions yet" over an "Archived (3)" row would contradict it. */}
             {timeGroups.length === 0 && !searching && timeFolders.every((f) => f === null) && (
               <p className="px-2.5 pt-3 text-xs text-gray-400 dark:text-gray-600">
                 {S.chat.noSessions}
@@ -2076,8 +2102,8 @@ export function Sidebar({
             )}
 
             {/* Whole-list paging: a fetched page lands in whichever bucket its rows' activity
-                puts them, so the row that pulls one belongs to the list, not to a bucket —
-                and its label says "conversations" where a bucket's says "more". */}
+              puts them, so the row that pulls one belongs to the list, not to a bucket —
+              and its label says "conversations" where a bucket's says "more". */}
             {!searching &&
               timeParts.active.length < projectCounts.active &&
               timeMoreAgents.length > 0 && (
@@ -2137,8 +2163,8 @@ export function Sidebar({
           }
         >
           <div className="py-1">
-            {/* System settings dialog: everyone gets the row — the dialog always has the
-                personal pages, and the server-global ones inside it stay gated by the
+            {/* System settings page: everyone gets the row — the page always has the
+                personal sections, and the server-global ones inside it stay gated by the
                 section registry rather than by this row. The preference rows that used to
                 stack here live on its pages now. */}
             <button
@@ -2146,13 +2172,13 @@ export function Sidebar({
               className={menuItemClass}
               onClick={() => {
                 setUserOpen(false);
-                setSettingsOpen(true);
+                navigate("/settings");
               }}
             >
               {S.settings.systemSettings}
             </button>
-            {/* Update entry, directly under the settings entry rather than on a page inside
-                it: one row for both backends (the server release here, the shell's own
+            {/* Update entry, directly under the settings entries rather than on a page inside
+                one of them: one row for both backends (the server release here, the shell's own
                 updater in the desktop window), naming where the update flow stands and
                 opening the update modal — where the flow is explained and acted on. The
                 modal is mounted by the app layout, so it outlives this menu. Hidden where
@@ -2182,8 +2208,6 @@ export function Sidebar({
           </div>
         </Dropdown>
       </div>
-
-      <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />
 
       <CreateProjectDialog
         open={createProjectOpen}

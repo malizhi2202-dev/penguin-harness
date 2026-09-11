@@ -15,6 +15,34 @@ export const DEFAULT_PROJECT_ID = "default_project";
 export const DEFAULT_AGENT_ID = "default_agent";
 
 /**
+ * Reserved data-root scope holding what every Project shares: the common Model table, the
+ * common Agent templates and the default plugin set (see state/common-config.ts).
+ *
+ * It is deliberately **not** a Project: it has no `projects` row, so it never appears in the
+ * Project list, it can never be created, renamed or deleted as one, and no Session may run in
+ * it. It reuses the `<root>/<scope>/…` layout, which is what lets every path helper below —
+ * and every Project-scoped store built on them — address the common layer by passing this id
+ * instead of a Project id.
+ *
+ * Docs: /docs/configuration § "Common config".
+ */
+export const COMMON_SCOPE_ID = "common";
+
+/**
+ * Whether an id is reserved by the data root itself and therefore can never name a Project.
+ * Enforced where a Project is created; every other surface only has to know the layout, not
+ * this rule.
+ */
+export function isReservedScopeId(id: string): boolean {
+  return id === COMMON_SCOPE_ID;
+}
+
+/** `<root>/common`, the common configuration scope's directory. */
+export function commonDir(root: string): string {
+  return path.join(root, COMMON_SCOPE_ID);
+}
+
+/**
  * Resolves the local data root directory.
  * Prefers the `PENGUIN_HOME` environment variable, otherwise falls back to `~/.penguin/data`
  * (under the hidden `~/.penguin` home so it never collides with unrelated folders, and in a

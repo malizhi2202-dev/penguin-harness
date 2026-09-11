@@ -10,6 +10,7 @@ import * as api from "../../api/endpoints";
 import { S } from "../../lib/strings";
 import { latestConversation } from "../../lib/session-grouping";
 import { navNoteFor, useUpdateBadges } from "../../lib/use-update-badges";
+import { navKeysFor } from "../../lib/nav-group-collapse";
 import { useAuth } from "../../state/auth";
 import { useProject } from "../../state/project";
 import { useSessions } from "../../state/sessions";
@@ -86,13 +87,9 @@ function CollapsedRail({ onExpand }: { onExpand: () => void }) {
   /** Page entries (rail positions 3-7): same routes, same labels as the pinned nav.
       Traces is not among them: reading a Trace happens in the chat toolbar's panel
       switcher, which is the only place it happens. */
-  const pages: ReadonlyArray<{ to: string; label: string; icon: string }> = [
-    { to: "/agents", label: S.nav.agents, icon: NAV_ICONS.agents },
-    { to: "/plugins", label: S.nav.plugins, icon: NAV_ICONS.plugins },
-    { to: "/models", label: S.nav.models, icon: NAV_ICONS.models },
-    { to: "/usage", label: S.nav.usage, icon: NAV_ICONS.usage },
-    { to: "/benchmark", label: S.nav.benchmark, icon: NAV_ICONS.benchmark },
-  ];
+  const pages: ReadonlyArray<{ to: string; label: string; icon: string }> = navKeysFor(
+    user?.isAdmin === true,
+  ).map((key) => ({ to: `/${key}`, label: S.nav[key], icon: NAV_ICONS[key] }));
 
   return (
     <div className="flex h-full flex-col items-center gap-1 py-2.5">

@@ -47,7 +47,9 @@ export function LoginPage() {
     setErrors({});
     try {
       await login(userId.trim(), password);
-      navigate("/chat", { replace: true });
+      // The scope-aware home (`/`), not /chat: an admin whose remembered context is the common
+      // configuration scope has no conversations, and the router sends that case to Models.
+      navigate("/", { replace: true });
     } catch (e) {
       setErrors({ form: apiErrorText(e) });
     } finally {

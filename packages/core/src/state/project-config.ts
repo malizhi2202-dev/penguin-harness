@@ -220,6 +220,55 @@ export function defaultProjectConfig(): ProjectConfig {
   };
 }
 
+/**
+ * The common Model entries a Project does not carry yet — the preview behind the "import from
+ * the common scope" action, and the input `mergeCommonModels` consumes.
+ *
+ * Identity is the `(provider, model_id)` pair, the same key the table itself uses: an entry the
+ * Project already has is never "missing", however much its credential, window or pricing
+ * differs — the Project's copy is its own, and importing over it would silently undo an edit
+ * someone made on purpose.
+ */
+export function missingCommonModels(common: ProjectConfig, project: ProjectConfig): ModelEntry[] {
+  return common.models.filter(
+    (entry) =>
+      !project.models.some(
+        (own) => own.provider === entry.provider && own.model_id === entry.model_id,
+      ),
+  );
+}
+
+/**
+ * Merges the common Model table into a Project's — the copy rule of the common scope.
+ *
+ * Append-only and Project-first: entries the Project lacks are copied in with their credential
+ * and metadata intact (so they are usable immediately), and a shared `(provider, model_id)` key
+ * keeps the Project's own entry untouched. `default_model` / `vision_model` fall back to the
+ * common side **only when the Project has none**: an unset default is an absence to fill, while
+ * a set one is a decision — and the common default is only adopted when the Project actually
+ * ends up carrying that entry, so the import can never leave a dangling reference.
+ *
+ * Returns the next Project config; writing it is the caller's business (this module never
+ * writes on merge).
+ */
+export function mergeCommonModels(common: ProjectConfig, project: ProjectConfig): ProjectConfig {
+  const added = missingCommonModels(common, project);
+  const models = added.length > 0 ? [...project.models, ...added] : project.models;
+  const carries = (ref: ModelRef | undefined): boolean =>
+    ref !== undefined &&
+    models.some((entry) => entry.provider === ref.provider && entry.model_id === ref.model_id);
+  const defaultModel =
+    project.default_model ?? (carries(common.default_model) ? common.default_model : undefined);
+  const visionModel =
+    project.vision_model ?? (carries(common.vision_model) ? common.vision_model : undefined);
+  return {
+    ...project,
+    models,
+    ...(defaultModel !== undefined ? { default_model: defaultModel } : {}),
+    ...(visionModel !== undefined ? { vision_model: visionModel } : {}),
+  };
+}
+
 /** The old format (concatenated storage id / string reference) is never migrated: reading it reports a clear error immediately (the product hasn't shipped yet). */
 const OLD_FORMAT_HINT =
   "No migration since the product hasn't shipped yet: delete this config file and rebuild it with `penguin config model add/default`.";

@@ -14,7 +14,7 @@
  * added to session-manager's active table (state idle).
  */
 import fs from "node:fs/promises";
-import { agentsDir, createAgent, isSessionMeta } from "@prismshadow/penguin-core";
+import { agentsDir, COMMON_SCOPE_ID, createAgent, isSessionMeta } from "@prismshadow/penguin-core";
 import type { ControlEnvContext, ProxyEnvPolicy } from "@prismshadow/penguin-core";
 import type {
   ApprovalMode,
@@ -50,6 +50,13 @@ export interface SessionServiceDeps {
   sessions: SessionsRepo;
   manager: SessionManager;
   projectConfig: ProjectConfigService;
+  /**
+   * Whether a real Project carries the reserved common-scope id, which disables the scope (see
+   * ProjectService.isCommonScopeBlocked). A predicate, not a value: the answer changes while the
+   * server runs. Absent means "never blocked" — and with a Project on that id, its Sessions must
+   * keep working exactly as they did, which is why the reserved-id refusal below consults it.
+   */
+  isCommonScopeBlocked?: () => boolean;
   /** In-process origin registry derived from session_meta (the DB stores no source column). */
   sources: SessionSources;
   /** Trace-file index: discovery / adoption / stats serve from it (mtime-gated reconciler; no per-request walks). */
@@ -329,6 +336,15 @@ export class SessionService {
      */
     client?: "web" | "cli";
   }): Promise<SessionInfo> {
+    // The common configuration scope holds templates, not runnable Agents: a Session there would
+    // write traces, scratchpads and workspaces into a scope that exists to be copied *from*, and
+    // it is the one place the reserved-id reuse must not reach. Refused here — the single choke
+    // point every surface (route, scheduler, machine) goes through — rather than in each caller.
+    if (args.projectId === COMMON_SCOPE_ID && !(this.deps.isCommonScopeBlocked?.() ?? false)) {
+      throw badRequest(
+        "The common configuration scope is not a Project: Agents there are templates to copy, not to run.",
+      );
+    }
     if ((args.modelId === undefined) !== (args.provider === undefined)) {
       throw badRequest(
         "modelId and provider must be given together as a (provider, modelId) pair: specify both, or neither to use the Project's default model.",

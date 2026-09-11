@@ -23,7 +23,7 @@ import type { ChangeEvent } from "react";
 import { useLocation, useNavigate } from "react-router";
 import type {
   AgentCreateRequest,
-  PluginItem,
+  CommonAgentTemplateItem,
   SkillMetadataItem,
 } from "@prismshadow/penguin-server/api";
 import * as api from "../../api/endpoints";
@@ -33,6 +33,7 @@ import { SEMANTIC_ID_PATTERN } from "../../lib/semantic-id";
 import { formatDateTime, formatRelativeDays } from "../../lib/format";
 import { useDocumentTitle } from "../../lib/use-document-title";
 import { useUpdateBadges } from "../../lib/use-update-badges";
+import { commonAgentEditorPath } from "../../lib/settings-sections";
 import { dismissTodo } from "../../lib/todo-dismissals";
 import { bulkOutcome, failedList, firstFailure, noticeCounts } from "../../lib/bulk-update";
 import { useAuth } from "../../state/auth";
@@ -52,7 +53,7 @@ import { AgentAvatar } from "../../components/ui/agent-avatar";
 import { GlyphIcon } from "../../components/ui/glyph-icon";
 import { UpdatePill } from "../../components/ui/update-dot";
 import { TodoNotice } from "../../components/ui/todo-notice";
-import { CloseIcon, GEAR_ICON, HOOK_ICON, PLUGIN_ICON } from "../../components/ui/icons";
+import { CloseIcon, GEAR_ICON, HOOK_ICON } from "../../components/ui/icons";
 import { STAT_ICONS } from "../../lib/stat-icons";
 import { DRAFT_SESSION_ID } from "../chat/chat-page";
 import { parkActiveDraft } from "../chat/draft-sessions";
@@ -68,6 +69,7 @@ import { WorkspaceSelect } from "../chat/workspace-select";
 import { SkillPickList } from "../skills/skill-pick-list";
 import type { PickableItem } from "../skills/skill-pick-list";
 import { addSkillNames, removeSkillNames, toggleSkillName } from "../skills/skill-selection";
+import { PluginPicker, pluginPickItems } from "../plugins/plugin-picker";
 import { ICON_SIZE } from "../../lib/icon-scale";
 
 /** Built-in Agent shipped with every Project (default_agent only; the server also rejects deletion, so no delete entry point is shown here). */
@@ -104,21 +106,78 @@ const STAT_LINK_CLASS =
   "inline-flex shrink-0 cursor-pointer items-center gap-1 tabular-nums " +
   "transition-colors duration-150 hover:text-gray-800 dark:hover:text-gray-200";
 
+/** Chrome of one row in a picker panel: the shared look the plugin picker's rows also use, so a template row and a plugin row read identically. */
+const pickerRowClass = (on: boolean) =>
+  `flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs transition-colors duration-150 hover:bg-gray-100 dark:hover:bg-gray-800 ${
+    on ? "font-medium text-gray-900 dark:text-gray-100" : "text-gray-600 dark:text-gray-400"
+  }`;
+
 /**
- * The library's plugins as picker rows. A row is a Skill's metadata, which a plugin's manifest
- * already carries (name, descriptions, icon, version); a plugin without an icon.svg draws the
- * puzzle piece rather than the book.
+ * Rows of the create dialog's template picker: the blank option first ("no template", the
+ * pre-existing behavior), then one row per common-scope template. The row carries what the
+ * dialog is actually choosing between — the template's display name, the id the copy will NOT
+ * inherit (the new Agent keeps the id typed above), and the skill / hook-package counts a copy
+ * would bring along, in the same wording the Agent card uses for them.
  */
-function pluginPickItems(plugins: readonly PluginItem[]): PickableItem[] {
-  return plugins.map((plugin) => ({ ...plugin, fallbackIcon: PLUGIN_ICON }));
+function TemplatePickList({
+  templates,
+  selected,
+  onPick,
+}: {
+  templates: readonly CommonAgentTemplateItem[];
+  /** The picked template's agentId; "" = the blank option. */
+  selected: string;
+  onPick: (agentId: string) => void;
+}) {
+  return (
+    <div className="max-h-56 overflow-y-auto">
+      <button
+        type="button"
+        aria-pressed={selected === ""}
+        onClick={() => onPick("")}
+        className={pickerRowClass(selected === "")}
+      >
+        <span className="min-w-0 flex-1 truncate">{S.agent.createTemplateEmpty}</span>
+        <span className="w-3 shrink-0 text-center">{selected === "" ? "✓" : ""}</span>
+      </button>
+      {templates.map((t) => {
+        const on = selected === t.agentId;
+        return (
+          <button
+            key={t.agentId}
+            type="button"
+            aria-pressed={on}
+            onClick={() => onPick(t.agentId)}
+            className={pickerRowClass(on)}
+          >
+            <span className="min-w-0 flex-1 truncate">
+              {t.name ?? t.agentId}
+              <span className="ml-2 font-mono text-gray-400 dark:text-gray-500">{t.agentId}</span>
+            </span>
+            <span className="shrink-0 whitespace-nowrap text-gray-400 dark:text-gray-500">
+              {S.skills.skillCount(t.skillCount)} · {S.hooks.hookCount(t.hookCount)}
+            </span>
+            <span className="w-3 shrink-0 text-center">{on ? "✓" : ""}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
 }
 
-export function AgentsPage() {
+/**
+ * `embedded` renders this page inside the System settings dialog's common-scope panes: the dialog
+ * pane already draws the heading and the explanation (its "?"), so the page drops its own title
+ * and its own scroll box and padding, and leaves the tab title alone. Everything else — the list,
+ * the toolbar, the create dialog — is the same page.
+ */
+export function AgentsPage({ embedded = false }: { embedded?: boolean } = {}) {
   const navigate = useNavigate();
-  useDocumentTitle(S.nav.agents);
+  useDocumentTitle(S.nav.agents, { enabled: !embedded });
   const { locale } = useLocale();
   const { user } = useAuth();
-  const { currentProject, agents, agentsLoading, reloadAgents, setCurrentAgentId } = useProject();
+  const { currentProject, commonScope, agents, agentsLoading, reloadAgents, setCurrentAgentId } =
+    useProject();
   /** The kernel trail's raised badge, or undefined — the notice under the title acts on it or clears it. */
   const kernelTodo = useUpdateBadges().todos.agents;
   /** The bulk kernel update's confirmation is open. */
@@ -159,6 +218,31 @@ export function AgentsPage() {
    * rejects the combination.
    */
   const [snapshotFile, setSnapshotFile] = useState<File | null>(null);
+  /**
+   * The common scope's Agent templates, offered as seeds: the new Agent starts as a copy of one.
+   * `null` until the read succeeds — on an empty list AND on a failed read the picker is simply
+   * not offered (the guard is released on failure, so the next open retries), because a create
+   * dialog that cannot show templates must still create a plain Agent.
+   */
+  const [templates, setTemplates] = useState<CommonAgentTemplateItem[] | null>(null);
+  const templatesPending = useRef(false);
+  /** The picked template's agentId ("" = no template, a blank Agent). */
+  const [templateAgentId, setTemplateAgentId] = useState("");
+  const [templateOpen, setTemplateOpen] = useState(false);
+  /**
+   * The common scope's default plugin set — what the server seeds a new Agent with when the
+   * request carries no `plugins` field. The dialog pre-selects it so the picker shows what will
+   * actually be installed, and so clearing it is expressible (an explicit empty array).
+   */
+  const [commonDefaults, setCommonDefaults] = useState<string[] | null>(null);
+  const defaultsPending = useRef(false);
+  /**
+   * Whether the user has touched the plugin picker in this dialog. Until they do, the selection
+   * is the pre-selected common default set and follows it; once they do, their choice stands —
+   * including the empty one, which is sent explicitly so "no plugins" is a real answer rather
+   * than an omitted field the server would refill with the defaults.
+   */
+  const [pluginsTouched, setPluginsTouched] = useState(false);
 
   /** Open the create dialog: don't keep the previous draft, always start from an empty form. */
   const openCreate = () => {
@@ -167,6 +251,7 @@ export function AgentsPage() {
     setDescription("");
     setIdError(undefined);
     setCreatePlugins([]);
+    setPluginsTouched(false);
     setPluginsOpen(false);
     setSkillsDir("");
     setDirSkills(null);
@@ -174,6 +259,8 @@ export function AgentsPage() {
     setCreateDirSkills([]);
     setDirSkillsOpen(false);
     setSnapshotFile(null);
+    setTemplateAgentId("");
+    setTemplateOpen(false);
     setCreateOpen(true);
   };
 
@@ -182,10 +269,14 @@ export function AgentsPage() {
     e.target.value = "";
     if (!file) return;
     setSnapshotFile(file);
-    // Seeding and the package are mutually exclusive; drop any picks made before.
+    // Seeding and the package are mutually exclusive; drop any picks made before. The template
+    // goes with them: the server refuses a snapshot combined with `templateAgentId`, and the
+    // package is the more specific answer to "what should this Agent start as".
     setCreatePlugins([]);
     setSkillsDir("");
     setCreateDirSkills([]);
+    setTemplateAgentId("");
+    setPluginsTouched(false);
     // Suggest the id from the package name (exported as <agentId>-v<n>.tar.gz) while the
     // field is still empty; the suggestion stays editable, an unusable derivation is dropped.
     if (!agentId.trim()) {
@@ -211,6 +302,55 @@ export function AgentsPage() {
       });
   }, [createOpen, library]);
 
+  /**
+   * The common scope's templates, fetched the first time the dialog opens (same lazy,
+   * retry-on-next-open convention as the library above).
+   *
+   * A failed read is deliberately NOT an error state: the templates are an optional
+   * convenience, and a member who cannot see them must still be able to create an Agent — the
+   * picker is simply not offered this time, and the released guard retries on the next open.
+   */
+  useEffect(() => {
+    if (!createOpen || templates !== null || templatesPending.current) return;
+    templatesPending.current = true;
+    api
+      .getCommonAgentTemplates()
+      .then((res) => setTemplates(res.templates))
+      .catch(() => {
+        templatesPending.current = false;
+      });
+  }, [createOpen, templates]);
+
+  // The common default plugin set, fetched on first open too, and applied while the user has
+  // not touched the picker (see pluginsTouched). A failed read leaves the picker empty: the
+  // server still seeds the defaults for an omitted field, and the hint says nothing rather than
+  // promising a list that could not be read. Plain Agents created anywhere in the app are
+  // subject to this set, the common scope included.
+  useEffect(() => {
+    if (!createOpen || commonDefaults !== null || defaultsPending.current) return;
+    defaultsPending.current = true;
+    api
+      .getCommonPlugins()
+      .then((res) => setCommonDefaults(res.defaultPlugins))
+      .catch(() => {
+        defaultsPending.current = false;
+      });
+  }, [createOpen, commonDefaults]);
+
+  // Reflect the fetched defaults in the picker, and keep following them while untouched (the
+  // only way `commonDefaults` changes after the first read is a language-independent re-read;
+  // the guard is what makes a cleared selection stick).
+  useEffect(() => {
+    if (!createOpen || commonDefaults === null || pluginsTouched) return;
+    setCreatePlugins(commonDefaults);
+  }, [createOpen, commonDefaults, pluginsTouched]);
+
+  // `pluginNames` is left off the create body while a template is chosen (a template is already
+  // a complete Agent and must not also collect the defaults), and the picked list — empty array
+  // included — is sent otherwise. So this is what "the dialog is showing the defaults" means.
+  const showPluginsDefaultHint =
+    !pluginsTouched && createPlugins.length > 0 && templateAgentId === "" && snapshotFile === null;
+
   // Cross-page create intent (the sidebar's mode-dependent "new" button navigates here
   // with { create: true } route state — the chat draft's route-state idiom): open the
   // existing create dialog once, then strip the state so a refresh or back-nav doesn't
@@ -228,6 +368,18 @@ export function AgentsPage() {
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const projectId = currentProject?.projectId;
+
+  /**
+   * Where an Agent's settings page lives for this context. A Project's Agent keeps the
+   * scope-blind `/agents/:id` route, because the app's own scope is that Project. A template
+   * opened from System settings keeps a route of its own under the section it came from: the
+   * editor reads its Agent through the current scope, and `/agents/:id` would read the Project's
+   * Agent of that id instead of the template the reader clicked.
+   */
+  const agentSettingsPath = (agentId: string, tab?: string) =>
+    commonScope
+      ? commonAgentEditorPath(agentId, tab)
+      : `/agents/${agentId}${tab === undefined ? "" : `?tab=${tab}`}`;
 
   // Re-read whenever the picked directory changes. A directory that carries no Skills answers with
   // an empty list, which the field states in place of its hint rather than treating as a failure.
@@ -291,12 +443,25 @@ export function AgentsPage() {
       if (description.trim()) body.description = description.trim();
       if (snapshotFile !== null) {
         // Initialize from the picked package; seeding is mutually exclusive (the package
-        // carries its own skills and hooks), and picking the file already cleared those fields.
+        // carries its own skills and hooks), and picking the file already cleared those fields
+        // — the template among them, which the server refuses alongside a snapshot.
         body.dataBase64 = await fileToBase64(snapshotFile);
+      } else if (templateAgentId !== "") {
+        // A template is already a complete Agent (config, prompt, Skills, hooks), so the request
+        // carries no plugin field at all: an omitted field would otherwise seed the common
+        // default set on top of the copy, and an empty one would state the opposite of the
+        // template. Name/description above still win over the template's, server-side.
+        body.templateAgentId = templateAgentId;
       } else {
         // Picked plugins are seeded server-side inside the same create call, so a failure leaves
-        // no half-equipped Agent behind.
-        if (createPlugins.length > 0) body.plugins = createPlugins;
+        // no half-equipped Agent behind. Sent as-is — the empty array included — because the
+        // picker is the user's answer: an omitted field means "seed the common defaults", which
+        // is exactly what clearing the pre-selected list must NOT do.
+        //
+        // The one exception is a default set that could not be read and a picker the user never
+        // touched: there the field is omitted so the server applies whatever it has, instead of
+        // turning a failed request for the list into "this Agent gets none".
+        if (pluginsTouched || commonDefaults !== null) body.plugins = createPlugins;
         // The pair only means anything together, so it is sent only when a directory actually
         // contributed something — picking a directory and then no Skills from it is a plain Agent.
         if (skillsDir && createDirSkills.length > 0) {
@@ -308,7 +473,7 @@ export function AgentsPage() {
       setCreateOpen(false);
       await reloadAgents();
       setCurrentAgentId(res.agent.agentId);
-      navigate(`/agents/${res.agent.agentId}`);
+      navigate(agentSettingsPath(res.agent.agentId));
     } catch (e) {
       setIdError(apiErrorText(e));
     } finally {
@@ -340,7 +505,7 @@ export function AgentsPage() {
     tab: "overview" | "tools" | "vault" | "schedules" | "skills" | "hooks" | "memory",
   ) => {
     setCurrentAgentId(agentId);
-    navigate(`/agents/${agentId}?tab=${tab}`);
+    navigate(agentSettingsPath(agentId, tab));
   };
 
   const doDelete = async () => {
@@ -401,18 +566,32 @@ export function AgentsPage() {
   };
 
   return (
-    <div className="h-full overflow-y-auto p-4 md:p-6">
+    <div className={embedded ? "" : "h-full overflow-y-auto p-4 md:p-6"}>
       <div className="mx-auto max-w-5xl">
         {/* The title row and the notice under it share one block, so the gap below the block
             (to the list) is the same whether or not the notice is showing — the models page's
             header has the same shape. */}
         <div className="mb-4">
           <div className="flex items-center justify-between gap-2">
-            <h1 className="text-xl font-semibold">{S.agent.listTitle}</h1>
+            {!embedded && (
+              <h1 className="text-xl font-semibold">
+                {commonScope ? S.commonScope.agentsTitle : S.agent.listTitle}
+              </h1>
+            )}
             <Button variant="primary" onClick={openCreate}>
               {S.agent.create}
             </Button>
           </div>
+
+          {/* Common configuration scope: what these Agents are, and what a Project does with
+              them. The list, the create dialog and the settings page below all work the same —
+              this line is the only thing that changes, because a template is edited exactly like
+              an Agent and the difference only shows at the moment one is copied. */}
+          {commonScope && (
+            <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
+              {S.commonScope.agentsHint}
+            </p>
+          )}
 
           {/* Last stop on the kernel trail, in the one shape all four dismissible trails use.
               An Agent's kernel is never NEW — the Agent already exists and its config is simply
@@ -515,13 +694,17 @@ export function AgentsPage() {
                         narrower than they are — a phone. Wrapping spends a second line instead,
                         and never triggers where the row already fits. */}
                     <div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-gray-500 dark:text-gray-400">
-                      <span
-                        className="inline-flex shrink-0 items-center gap-1 tabular-nums"
-                        title={S.agent.sessionCount(a.sessionCount)}
-                      >
-                        <GlyphIcon d={CARD_ICONS.sessions} size={ICON_SIZE.inlineGlyph} />
-                        {a.sessionCount}
-                      </span>
+                      {/* A template can never hold a Session (the server refuses one on the
+                          reserved id), so the count would read as "no conversations yet". */}
+                      {!commonScope && (
+                        <span
+                          className="inline-flex shrink-0 items-center gap-1 tabular-nums"
+                          title={S.agent.sessionCount(a.sessionCount)}
+                        >
+                          <GlyphIcon d={CARD_ICONS.sessions} size={ICON_SIZE.inlineGlyph} />
+                          {a.sessionCount}
+                        </span>
+                      )}
                       <button
                         type="button"
                         className={STAT_LINK_CLASS}
@@ -552,36 +735,44 @@ export function AgentsPage() {
                         <GlyphIcon d={HOOK_ICON} size={ICON_SIZE.inlineGlyph} />
                         {a.hookCount}
                       </button>
-                      <button
-                        type="button"
-                        className={STAT_LINK_CLASS}
-                        title={S.agent.memoryCount(a.memoryCount)}
-                        aria-label={S.agent.memoryCount(a.memoryCount)}
-                        onClick={() => openSettingsTab(a.agentId, "memory")}
-                      >
-                        <GlyphIcon d={CARD_ICONS.memory} size={ICON_SIZE.inlineGlyph} />
-                        {a.memoryCount}
-                      </button>
-                      <button
-                        type="button"
-                        className={STAT_LINK_CLASS}
-                        title={S.agent.vaultKeyCount(a.vaultKeyCount)}
-                        aria-label={S.agent.vaultKeyCount(a.vaultKeyCount)}
-                        onClick={() => openSettingsTab(a.agentId, "vault")}
-                      >
-                        <GlyphIcon d={CARD_ICONS.vaultKeys} size={ICON_SIZE.inlineGlyph} />
-                        {a.vaultKeyCount}
-                      </button>
-                      <button
-                        type="button"
-                        className={STAT_LINK_CLASS}
-                        title={S.agent.scheduleCount(a.scheduleCount)}
-                        aria-label={S.agent.scheduleCount(a.scheduleCount)}
-                        onClick={() => openSettingsTab(a.agentId, "schedules")}
-                      >
-                        <GlyphIcon d={CARD_ICONS.schedules} size={ICON_SIZE.inlineGlyph} />
-                        {a.scheduleCount}
-                      </button>
+                      {/* Memory / vault / schedules are not part of what a template copy carries
+                          (secrets, that Agent's own memory and its timed work stay behind), so
+                          their counts have nothing to say about a template and their tabs do not
+                          exist on the settings page here. */}
+                      {!commonScope && (
+                        <>
+                          <button
+                            type="button"
+                            className={STAT_LINK_CLASS}
+                            title={S.agent.memoryCount(a.memoryCount)}
+                            aria-label={S.agent.memoryCount(a.memoryCount)}
+                            onClick={() => openSettingsTab(a.agentId, "memory")}
+                          >
+                            <GlyphIcon d={CARD_ICONS.memory} size={ICON_SIZE.inlineGlyph} />
+                            {a.memoryCount}
+                          </button>
+                          <button
+                            type="button"
+                            className={STAT_LINK_CLASS}
+                            title={S.agent.vaultKeyCount(a.vaultKeyCount)}
+                            aria-label={S.agent.vaultKeyCount(a.vaultKeyCount)}
+                            onClick={() => openSettingsTab(a.agentId, "vault")}
+                          >
+                            <GlyphIcon d={CARD_ICONS.vaultKeys} size={ICON_SIZE.inlineGlyph} />
+                            {a.vaultKeyCount}
+                          </button>
+                          <button
+                            type="button"
+                            className={STAT_LINK_CLASS}
+                            title={S.agent.scheduleCount(a.scheduleCount)}
+                            aria-label={S.agent.scheduleCount(a.scheduleCount)}
+                            onClick={() => openSettingsTab(a.agentId, "schedules")}
+                          >
+                            <GlyphIcon d={CARD_ICONS.schedules} size={ICON_SIZE.inlineGlyph} />
+                            {a.scheduleCount}
+                          </button>
+                        </>
+                      )}
                       <span
                         className="inline-flex shrink-0 items-center gap-1"
                         title={`${S.agent.updatedAt} ${a.updatedAt ? formatDateTime(a.updatedAt) : "—"}`}
@@ -599,34 +790,42 @@ export function AgentsPage() {
                     className="hidden shrink-0 md:block"
                   />
 
-                  {/* Button group to the right of the sparkline: "New Chat" shows text, the rest are square icon buttons (tooltip shows the full name) */}
+                  {/* Button group to the right of the sparkline: "New Chat" shows text, the rest are square icon buttons (tooltip shows the full name).
+                      "New Chat" and "Usage" are Project-scope entries — a Session cannot be
+                      created in the common scope (the server refuses it) and the cost center
+                      reads a Project's own runs — so a template card carries Settings and
+                      Delete only. */}
                   <div className="flex shrink-0 items-center gap-2">
-                    <Button size="sm" variant="primary" onClick={() => newChat(a.agentId)}>
-                      <GlyphIcon d={CARD_ICONS.newChat} />
-                      {S.chat.newSessionMenu}
-                    </Button>
+                    {!commonScope && (
+                      <Button size="sm" variant="primary" onClick={() => newChat(a.agentId)}>
+                        <GlyphIcon d={CARD_ICONS.newChat} />
+                        {S.chat.newSessionMenu}
+                      </Button>
+                    )}
                     <Button
                       size="sm"
                       onClick={() => {
                         setCurrentAgentId(a.agentId);
-                        navigate(`/agents/${a.agentId}`);
+                        navigate(agentSettingsPath(a.agentId));
                       }}
                     >
                       <GlyphIcon d={GEAR_ICON} />
                       {S.common.settings}
                     </Button>
-                    <Button
-                      size="icon"
-                      title={S.nav.usage}
-                      aria-label={S.nav.usage}
-                      onClick={() => navigate(`/usage?agentId=${encodeURIComponent(a.agentId)}`)}
-                    >
-                      <GlyphIcon
-                        d={CARD_ICONS.usage}
-                        size={15}
-                        className="text-gray-600 dark:text-gray-300"
-                      />
-                    </Button>
+                    {!commonScope && (
+                      <Button
+                        size="icon"
+                        title={S.nav.usage}
+                        aria-label={S.nav.usage}
+                        onClick={() => navigate(`/usage?agentId=${encodeURIComponent(a.agentId)}`)}
+                      >
+                        <GlyphIcon
+                          d={CARD_ICONS.usage}
+                          size={15}
+                          className="text-gray-600 dark:text-gray-300"
+                        />
+                      </Button>
+                    )}
                     {/* Built-in Agents can't be deleted: shown as a non-button light gray
                         placeholder (no border/background, no hover response, disabled cursor,
                         explained via tooltip); the transparent border keeps the same box size as
@@ -741,107 +940,136 @@ export function AgentsPage() {
           </div>
           {snapshotFile === null && (
             <>
-              {/* Seed plugins: the form-variant picker (same trigger as the schedule dialog's
-              model and workspace pickers) over the shared multi-select panel, so a dialog field
-              and the composer's dropdown offer one list with one set of row semantics. */}
-              <div>
-                <FieldLabel>{S.agent.createPlugins}</FieldLabel>
-                <FormPicker
-                  open={pluginsOpen}
-                  setOpen={setPluginsOpen}
-                  label={
-                    createPlugins.length === 0
-                      ? S.agent.createPluginsPlaceholder
-                      : S.agent.createPluginsPicked(createPlugins.length)
-                  }
-                  muted={createPlugins.length === 0}
-                  title={S.agent.createPlugins}
-                  ariaLabel={S.agent.createPlugins}
-                  disabled={busy}
-                  menuClass="w-[26rem]"
-                >
-                  <SkillPickList
-                    skills={library ?? []}
+              {/* Optional common-scope template: the new Agent starts as a copy of one. Offered
+                  only when the common scope actually holds templates (and only while no snapshot
+                  is picked — the server refuses the combination). The picker below it disappears
+                  once one is chosen: the template carries its own Skills and hooks, which is the
+                  same one-in-one-out relationship the snapshot has with the seed fields. */}
+              {templates !== null && templates.length > 0 && (
+                <div>
+                  <FieldLabel>{S.agent.createTemplate}</FieldLabel>
+                  <FormPicker
+                    open={templateOpen}
+                    setOpen={setTemplateOpen}
+                    label={
+                      templateAgentId === ""
+                        ? S.agent.createTemplateEmpty
+                        : (templates.find((t) => t.agentId === templateAgentId)?.name ??
+                          templateAgentId)
+                    }
+                    muted={templateAgentId === ""}
+                    title={S.agent.createTemplatePick}
+                    ariaLabel={S.agent.createTemplate}
+                    disabled={busy}
+                    menuClass="w-[26rem]"
+                  >
+                    <TemplatePickList
+                      templates={templates}
+                      selected={templateAgentId}
+                      onPick={(picked) => {
+                        setTemplateAgentId(picked);
+                        setTemplateOpen(false);
+                      }}
+                    />
+                  </FormPicker>
+                  <FieldHint>
+                    {templateAgentId === ""
+                      ? S.agent.createTemplateHint
+                      : S.agent.createTemplateSkillsOff}
+                  </FieldHint>
+                </div>
+              )}
+              {templateAgentId === "" && (
+                <>
+                  {/* Seed plugins: the shared form-variant picker (plugins/plugin-picker.tsx),
+                      over the shared multi-select panel, so a dialog field and the composer's
+                      dropdown offer one list with one set of row semantics. */}
+                  <PluginPicker
+                    label={S.agent.createPlugins}
+                    placeholder={S.agent.createPluginsPlaceholder}
+                    pickedLabel={S.agent.createPluginsPicked}
                     selected={createPlugins}
-                    onToggle={(pluginName) =>
-                      setCreatePlugins((prev) => toggleSkillName(prev, pluginName))
+                    onSelectedChange={(updater) => {
+                      // Touching the picker — including clearing it — ends the "these are the
+                      // common defaults" state: the user's answer is what gets sent.
+                      setPluginsTouched(true);
+                      setCreatePlugins(updater);
+                    }}
+                    library={library}
+                    libraryError={libraryError}
+                    hint={
+                      showPluginsDefaultHint
+                        ? S.agent.createPluginsDefaultHint
+                        : S.agent.createPluginsHint
                     }
-                    onSelectAll={(names) => setCreatePlugins((prev) => addSkillNames(prev, names))}
-                    onSelectNone={(names) =>
-                      setCreatePlugins((prev) => removeSkillNames(prev, names))
-                    }
-                    emptyHint={library === null ? S.common.loading : S.agent.createPluginsEmpty}
-                    searchPlaceholder={S.plugins.searchPlaceholder}
+                    disabled={busy}
+                    open={pluginsOpen}
+                    setOpen={setPluginsOpen}
                   />
-                </FormPicker>
-                {libraryError ? (
-                  <FieldError>{libraryError}</FieldError>
-                ) : (
-                  <FieldHint>{S.agent.createPluginsHint}</FieldHint>
-                )}
-              </div>
-              {/* Skills a checkout already carries: pick the project directory, then pick from what
+                  {/* Skills a checkout already carries: pick the project directory, then pick from what
               its .agents/skills / .claude/skills hold. Separate from the library field because a
               directory Skill may share a library plugin's Skill name and still be the one installed. */}
-              <div>
-                <FieldLabel>{S.agent.createDirSkills}</FieldLabel>
-                <WorkspaceSelect
-                  projectId={projectId ?? ""}
-                  workspace={skillsDir}
-                  onChange={setSkillsDir}
-                  variant="form"
-                  fieldLabel={S.agent.createDirSkills}
-                  emptyLabel={S.agent.createDirSkillsPick}
-                  menuHint={S.agent.createDirSkillsHint}
-                  clearLabel={S.agent.createDirSkillsClear}
-                />
-                {skillsDir && dirSkills !== null && dirSkills.length > 0 && (
-                  <div className="mt-2">
-                    <FormPicker
-                      open={dirSkillsOpen}
-                      setOpen={setDirSkillsOpen}
-                      label={
-                        createDirSkills.length === 0
-                          ? S.agent.createSkillsPlaceholder
-                          : S.agent.createSkillsPicked(createDirSkills.length)
-                      }
-                      muted={createDirSkills.length === 0}
-                      title={S.agent.createDirSkills}
-                      ariaLabel={S.agent.createDirSkills}
-                      disabled={busy}
-                      menuClass="w-[26rem]"
-                    >
-                      <SkillPickList
-                        skills={dirSkills}
-                        selected={createDirSkills}
-                        onToggle={(skillName) =>
-                          setCreateDirSkills((prev) => toggleSkillName(prev, skillName))
-                        }
-                        onSelectAll={(names) =>
-                          setCreateDirSkills((prev) => addSkillNames(prev, names))
-                        }
-                        onSelectNone={(names) =>
-                          setCreateDirSkills((prev) => removeSkillNames(prev, names))
-                        }
-                        emptyHint={S.agent.createDirSkillsEmpty}
-                      />
-                    </FormPicker>
+                  <div>
+                    <FieldLabel>{S.agent.createDirSkills}</FieldLabel>
+                    <WorkspaceSelect
+                      projectId={projectId ?? ""}
+                      workspace={skillsDir}
+                      onChange={setSkillsDir}
+                      variant="form"
+                      fieldLabel={S.agent.createDirSkills}
+                      emptyLabel={S.agent.createDirSkillsPick}
+                      menuHint={S.agent.createDirSkillsHint}
+                      clearLabel={S.agent.createDirSkillsClear}
+                    />
+                    {skillsDir && dirSkills !== null && dirSkills.length > 0 && (
+                      <div className="mt-2">
+                        <FormPicker
+                          open={dirSkillsOpen}
+                          setOpen={setDirSkillsOpen}
+                          label={
+                            createDirSkills.length === 0
+                              ? S.agent.createSkillsPlaceholder
+                              : S.agent.createSkillsPicked(createDirSkills.length)
+                          }
+                          muted={createDirSkills.length === 0}
+                          title={S.agent.createDirSkills}
+                          ariaLabel={S.agent.createDirSkills}
+                          disabled={busy}
+                          menuClass="w-[26rem]"
+                        >
+                          <SkillPickList
+                            skills={dirSkills}
+                            selected={createDirSkills}
+                            onToggle={(skillName) =>
+                              setCreateDirSkills((prev) => toggleSkillName(prev, skillName))
+                            }
+                            onSelectAll={(names) =>
+                              setCreateDirSkills((prev) => addSkillNames(prev, names))
+                            }
+                            onSelectNone={(names) =>
+                              setCreateDirSkills((prev) => removeSkillNames(prev, names))
+                            }
+                            emptyHint={S.agent.createDirSkillsEmpty}
+                          />
+                        </FormPicker>
+                      </div>
+                    )}
+                    {dirSkillsError ? (
+                      <FieldError>{dirSkillsError}</FieldError>
+                    ) : (
+                      <FieldHint>
+                        {!skillsDir
+                          ? S.agent.createDirSkillsHint
+                          : dirSkills === null
+                            ? S.common.loading
+                            : dirSkills.length === 0
+                              ? S.agent.createDirSkillsEmpty
+                              : S.agent.createDirSkillsFound(dirSkills.length)}
+                      </FieldHint>
+                    )}
                   </div>
-                )}
-                {dirSkillsError ? (
-                  <FieldError>{dirSkillsError}</FieldError>
-                ) : (
-                  <FieldHint>
-                    {!skillsDir
-                      ? S.agent.createDirSkillsHint
-                      : dirSkills === null
-                        ? S.common.loading
-                        : dirSkills.length === 0
-                          ? S.agent.createDirSkillsEmpty
-                          : S.agent.createDirSkillsFound(dirSkills.length)}
-                  </FieldHint>
-                )}
-              </div>
+                </>
+              )}
             </>
           )}
         </div>

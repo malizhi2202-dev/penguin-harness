@@ -11,7 +11,13 @@
  * Project provisioning at signup.
  */
 import fs from "node:fs/promises";
-import { DEFAULT_PROJECT_ID, projectDir, provisionProjectAgents } from "@prismshadow/penguin-core";
+import {
+  COMMON_SCOPE_ID,
+  DEFAULT_PROJECT_ID,
+  isReservedScopeId,
+  projectDir,
+  provisionProjectAgents,
+} from "@prismshadow/penguin-core";
 import type { MemberInfo, ProjectRole, ProjectSummary } from "../api/types.js";
 import { HttpError } from "../http/errors.js";
 import type { AgentsRepo } from "../db/repos/agents.js";
@@ -63,6 +69,21 @@ export interface ProjectServiceDeps {
 export class ProjectService {
   constructor(private readonly deps: ProjectServiceDeps) {}
 
+  /**
+   * Whether a real Project occupies the reserved common-scope id.
+   *
+   * Creating such a Project was allowed before the common scope existed, and that Project's
+   * directory is the very `<root>/common/` the scope uses. Rather than let the scope shadow it —
+   * which would evict its members (404) and refuse its Sessions and deletions — the collision
+   * **disables the common scope**: this Project keeps behaving exactly as it did, and every
+   * common-scope-only surface reports that the scope is unavailable. The check disappears with
+   * the upgrade window: once no data root can carry such a Project (creation has refused the id
+   * since this release), `isCommonScopeBlocked` and its call sites can be deleted.
+   */
+  isCommonScopeBlocked(): boolean {
+    return this.deps.projects.findById(COMMON_SCOPE_ID) !== null;
+  }
+
   // —— Authorization rules (single implementation point) ——
 
   /**
@@ -76,6 +97,29 @@ export class ProjectService {
     userId: string,
     projectId: string,
   ): (ProjectRow & { role: ProjectRole }) | null {
+    // The common configuration scope is not a Project — it has no row, never appears in the
+    // Project list and can never be created, renamed or deleted as one. Rather than give it a
+    // role that half the routes would have to re-interpret, the scope is **admin-only through
+    // the ordinary Project routes**: an admin resolves to its owner, everyone else gets the same
+    // 404 an inaccessible Project gives. That is what keeps every existing write route
+    // (Agent creation, config, Skills, hooks) admin-only without a second rule to maintain —
+    // the surfaces a non-admin still needs (the default plugin set, the list of templates the
+    // create dialog offers) have their own read endpoints on /api/common.
+    // `isCommonScopeBlocked` first: when a real Project carries the reserved id (a data root from
+    // before this scope existed), the scope is off and that Project is resolved below like any
+    // other — the collision must never take an existing Project away from its members.
+    if (projectId === COMMON_SCOPE_ID && !this.isCommonScopeBlocked()) {
+      const user = this.deps.users.findById(userId);
+      if (user === null || !user.isAdmin) return null;
+      return {
+        projectId: COMMON_SCOPE_ID,
+        ownerUserId: user.userId,
+        // The scope has no creation time of its own; a fixed epoch keeps the synthetic row
+        // stable across calls instead of inventing a timestamp on every read.
+        createdAt: new Date(0).toISOString(),
+        role: "owner",
+      };
+    }
     const row = this.deps.projects.findById(projectId);
     if (!row) return null;
     if (row.ownerUserId === userId) return { ...row, role: "owner" };
@@ -155,6 +199,15 @@ export class ProjectService {
    * an admin's id contains no hyphen (occupying no user's namespace).
    */
   async createProject(owner: UserRow, projectId: string, name?: string): Promise<ProjectSummary> {
+    // Reserved by the data root (the common configuration scope): refused before the id-shape
+    // checks so the reason is the reservation, not a pattern mismatch.
+    if (isReservedScopeId(projectId)) {
+      throw new HttpError(
+        400,
+        "reserved_project_id",
+        `"${projectId}" is reserved by the data root and cannot name a Project.`,
+      );
+    }
     if (owner.isAdmin) {
       if (!SEMANTIC_ID_PATTERN.test(projectId)) {
         throw new HttpError(
@@ -252,6 +305,18 @@ export class ProjectService {
    * reload.
    */
   async renameProject(userId: string, projectId: string, name: string): Promise<ProjectSummary> {
+    // An admin is the common scope's owner through the same role rule, so the reservation has to
+    // be refused explicitly: renaming it would only relabel a scope that is not a Project.
+    // `isCommonScopeBlocked` again: when a real Project carries the id, this is that Project's own
+    // rename and it must work like any other — the fallback exists so the collision costs its users
+    // nothing, and a refused rename would be exactly the kind of cost it was chosen to avoid.
+    if (isReservedScopeId(projectId) && !this.isCommonScopeBlocked()) {
+      throw new HttpError(
+        400,
+        "reserved_project_id",
+        `"${projectId}" is the common configuration scope, not a Project: it cannot be renamed.`,
+      );
+    }
     const row = this.requireProjectOwner(userId, projectId);
     await this.deps.projectConfig.setName(projectId, name);
     // requireProjectOwner already established the role; it returns the plain row.
@@ -274,6 +339,19 @@ export class ProjectService {
    */
   async deleteProject(userId: string, projectId: string): Promise<void> {
     this.requireProjectOwner(userId, projectId);
+    // The common scope passes the owner check for an admin (that is how its write rule is
+    // expressed), so it must be refused here: deleting it would recursively remove the shared
+    // models, Agent templates and default plugin set of every Project on this data root.
+    // Same exception as the rename above: with the id held by a real Project, this deletes that
+    // Project — which is the only way its owner gets the directory back and the scope enabled
+    // without touching the data root by hand.
+    if (isReservedScopeId(projectId) && !this.isCommonScopeBlocked()) {
+      throw new HttpError(
+        400,
+        "reserved_project_id",
+        `"${projectId}" is the common configuration scope, not a Project: it cannot be deleted.`,
+      );
+    }
     if (projectId === DEFAULT_PROJECT_ID) {
       throw new HttpError(
         409,

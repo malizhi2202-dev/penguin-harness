@@ -661,6 +661,68 @@ export interface DefaultModelResponse {
   defaultModel: ModelRefDto;
 }
 
+/**
+ * POST /api/projects/:p/models/import-common (owner): copies the common configuration scope's
+ * Model table into this Project — the manual counterpart of the copy a new Project is seeded
+ * with, for models added to the common scope afterwards.
+ *
+ * The copy never overwrites: an entry the Project already carries under the same
+ * `(provider, model_id)` key keeps its own credential and metadata, and `defaultModel` /
+ * `visionModel` are adopted only where the Project had none. `addedCount` is what actually
+ * landed, so the UI can report "0 added" rather than imply something happened.
+ */
+export interface CommonModelImportResult {
+  /** The `(provider, model_id)` pairs copied in, in the order the common table lists them. */
+  added: ModelRefDto[];
+  addedCount: number;
+  /** The Project's default Model after the import (unchanged when it had one). */
+  defaultModel?: ModelRefDto;
+  /** The Project's vision Model after the import (unchanged, or newly filled from the common side). */
+  visionModel?: ModelRefDto;
+}
+
+/**
+ * GET /api/common/plugins (any signed-in user) and PUT (admin): the common scope's default
+ * plugin set — what a newly created Agent is seeded with when its creator picks nothing.
+ * This is a listing of the *configuration*; whether a name still exists in the library is
+ * reported per name as `installed`/`available` so the UI can show a stale entry without
+ * failing the whole read.
+ */
+export interface CommonPluginsResponse {
+  /** Configured default plugin names, in stored order. */
+  defaultPlugins: string[];
+  /** The subset of {@link defaultPlugins} the built-in library no longer carries. */
+  unknownPlugins: string[];
+}
+
+/** PUT /api/common/plugins (admin): replaces the whole default plugin set. */
+export interface CommonPluginsUpdateRequest {
+  defaultPlugins: string[];
+}
+
+/**
+ * GET /api/common/agent-templates (any signed-in user): the common scope's Agent templates, as
+ * the create-Agent dialog needs them — identity plus what a copy would bring along.
+ *
+ * Deliberately not the Agent listing shape: a template has no sessions, no vault and no created
+ * time of its own here, and the dialog only asks "which one, and what is in it". Config bodies,
+ * Skills and credentials never travel in this listing.
+ */
+export interface CommonAgentTemplateItem {
+  agentId: string;
+  /** Display name from the template's system_config.yaml (falls back to the id). */
+  name?: string;
+  description?: string;
+  /** Skills and hook packages the copy would bring (counts only, like the Agent card). */
+  skillCount: number;
+  hookCount: number;
+}
+
+/** Response of GET /api/common/agent-templates. */
+export interface CommonAgentTemplatesResponse {
+  templates: CommonAgentTemplateItem[];
+}
+
 // ---------------------------------------------------------------------------
 // Provider key-minting flows (/api/projects/:p/model-oauth, owner)
 // ---------------------------------------------------------------------------
@@ -882,8 +944,11 @@ export interface AgentCreateRequest {
   /**
    * Library plugin names installed into the new Agent, seeding it at creation — each plugin's
    * skills and hook package. Every name must exist in the library (404 `unknown_plugin`
-   * otherwise, before anything is created); omitted or empty leaves the Agent with nothing
-   * installed, which is what a plain Agent gets by default.
+   * otherwise, before anything is created).
+   *
+   * **Omitted** means the creator chose nothing, so the data root's common default plugin set
+   * applies instead (see GET /api/common/plugins) — unless a template or a snapshot is used, both
+   * of which already describe a complete Agent. An explicit empty array is a choice: no plugins.
    */
   plugins?: string[];
   /**
@@ -896,10 +961,20 @@ export interface AgentCreateRequest {
   skillsDirectory?: string;
   directorySkills?: string[];
   /**
+   * An Agent id in the data root's common configuration scope to create this Agent from. The new
+   * Agent is a **copy** of that template's behavior — config, prompt, Skills, hooks — and is
+   * independent of it afterwards; the template's vault, memory and schedules stay behind (404
+   * `agent_not_found` when the template is gone, raised before anything is created). An explicit
+   * `name` / `description` wins; otherwise the new Agent keeps its own id as its name, and the
+   * template's description when none is given. Mutually exclusive with `dataBase64`.
+   */
+  templateAgentId?: string;
+  /**
    * Base64 of an exported Agent State snapshot package (`.tar.gz`): the new Agent is
    * initialized from the package instead of the default template. Mutually exclusive with
-   * seeding (`plugins` / `skillsDirectory`) — the package carries its own skills and hooks.
-   * Explicit `name` / `description` override the package's values; absent ones keep them.
+   * seeding (`plugins` / `skillsDirectory` / `templateAgentId`) — the package carries its own
+   * skills and hooks. Explicit `name` / `description` override the package's values; absent
+   * ones keep them.
    */
   dataBase64?: string;
 }

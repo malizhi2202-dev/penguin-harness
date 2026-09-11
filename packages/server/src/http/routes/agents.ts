@@ -5,6 +5,7 @@
  * Session count, total Session count, and config last-modified time.
  */
 import { Hono } from "hono";
+import { isValidId } from "@prismshadow/penguin-core";
 import type { AgentCreateResponse, AgentsResponse, AgentSummary } from "../../api/types.js";
 import type { AppEnv } from "../../auth/middleware.js";
 import { settleWithin } from "../settle.js";
@@ -83,6 +84,17 @@ export function agentsRoutes(deps: AppDeps): Hono<AppEnv> {
     // Optional snapshot seed: the new Agent starts from an exported package instead of the
     // default template (the service rejects combining it with seeding).
     const archive = body.dataBase64 === undefined ? undefined : readArchiveBase64(body);
+    // Optional common-scope template: the new Agent is created from a *copy* of that template's
+    // behavior (see AgentService.createAgent). The name is validated like any other Agent id so a
+    // traversal-shaped value can never reach the template path, and the service reports a missing
+    // template as a failed creation rather than an empty Agent.
+    const templateAgentId =
+      body.templateAgentId === undefined
+        ? undefined
+        : requireString(body, "templateAgentId", { label: "templateAgentId" });
+    if (templateAgentId !== undefined && !isValidId(templateAgentId)) {
+      throw badRequest("templateAgentId is not a valid Agent id.");
+    }
     const item = await deps.agentService.createAgent(
       projectId,
       agentId,
@@ -91,6 +103,7 @@ export function agentsRoutes(deps: AppDeps): Hono<AppEnv> {
       plugins,
       directory,
       archive,
+      templateAgentId,
     );
     const agent: AgentSummary = {
       ...item,

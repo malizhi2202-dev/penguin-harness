@@ -3,7 +3,9 @@
  * names where the flow stands (check / checking / a release offered / downloading with its
  * percentage / restart to update / restarting / cannot update), and every state opens the
  * update modal, which is where the flow is explained and acted on. The running version
- * sits muted on the right. Renders nothing where this session can update nothing.
+ * sits muted on the right. Renders nothing where this session can update nothing — including a
+ * deployment that has turned the lookup off (`PENGUIN_UPDATE_CHECK=off`), where there is no
+ * release to compare against and no call left to make.
  */
 import { S } from "../../lib/strings";
 import { updateRowModel } from "../../lib/update-flow";
@@ -21,6 +23,11 @@ export function UpdateRow({
 }) {
   const { mode, flow, currentVersion } = useUpdateFlow();
   if (mode === "none") return null;
+  // A deployment that switched the lookup off (PENGUIN_UPDATE_CHECK=off) has nothing for this row
+  // to do: the disabled response carries no version to compare against and no release URL, so the
+  // modal behind the row could only tell the reader to go look on GitHub themselves. The row also
+  // exists to *start* the app's only outbound call, so it goes away together with the lookup.
+  if (flow.kind === "disabled") return null;
   const row = updateRowModel(flow);
   return (
     <button

@@ -42,6 +42,7 @@ import type {
   ModelVisionDetectRequest,
 } from "@prismshadow/penguin-server/api";
 import * as api from "../../api/endpoints";
+import { ApiError } from "../../api/client";
 import { S } from "../../lib/strings";
 import { apiErrorText } from "../../lib/api-error";
 import { useDocumentTitle } from "../../lib/use-document-title";
@@ -618,9 +619,15 @@ const isModelGroupDrag = (e: ReactDragEvent): boolean =>
 /** Dragging a group needs a pointer that can drag — HTML5 drag-and-drop never fires from touch (the sidebar's query). */
 const DRAG_POINTER_QUERY = "(hover: hover) and (pointer: fine)";
 
-export function ModelsPage() {
-  useDocumentTitle(S.models.title);
-  const { currentProject } = useProject();
+/**
+ * `embedded` renders this page inside the System settings dialog's common-scope panes: the pane
+ * draws the heading and the explanation, so the page drops its own title, scroll box and padding,
+ * and leaves the tab title to the page behind the dialog. The table, its search and every action
+ * are unchanged.
+ */
+export function ModelsPage({ embedded = false }: { embedded?: boolean } = {}) {
+  useDocumentTitle(S.models.title, { enabled: !embedded });
+  const { currentProject, commonScope } = useProject();
   const projectId = currentProject?.projectId ?? null;
   const isOwner = currentProject?.role === "owner";
   /** The Models trail's raised badge, or undefined — the header's two marks appear with it. */
@@ -699,6 +706,8 @@ export function ModelsPage() {
   /** Initial load failure: shown inline only when the whole page has no content (there's no context to pop a toast against). */
   const [loadError, setLoadError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  /** "Import from common" is in flight (the button disables; a second press would duplicate the request). */
+  const [importing, setImporting] = useState(false);
   // Currency follows the user setting (toggled in sidebar settings).
   const { currency } = useTheme();
 
@@ -833,10 +842,33 @@ export function ModelsPage() {
   };
 
   /**
-   * Group speed test: one real request per model, strictly sequential (concurrent probes
-   * trip provider rate limits), each result written to the card as it lands. The
-   * confirmation dialog (speedFor) has already warned about quota by the time this runs.
+   * "Import from common": copy the common configuration scope's Model table into this Project.
+   *
+   * Append-only and Project-first (the server's rule): entries this Project already has keep
+   * their own credential, so the honest report is the count that actually landed — an
+   * `addedCount` of 0 means the Project was already complete and is stated as such rather than
+   * as a success. A common scope with no models at all answers 409 `no_common_models`, which is
+   * a normal state of an unconfigured data root: it is told as information, not as a failure.
    */
+  const importFromCommon = async () => {
+    if (!projectId || importing) return;
+    setImporting(true);
+    try {
+      const res = await api.importCommonModels(projectId);
+      if (res.addedCount === 0) toastInfo(S.models.importCommonNone);
+      else toastSuccess(S.models.importCommonDone(res.addedCount));
+      // Re-read even at 0: the response also carries the default / vision pointers, which the
+      // import may have filled from the common side.
+      await load();
+    } catch (e) {
+      if (e instanceof ApiError && e.code === "no_common_models")
+        toastInfo(S.models.importCommonEmpty);
+      else toastError(apiErrorText(e));
+    } finally {
+      setImporting(false);
+    }
+  };
+
   const runSpeedTest = async (providerId: string) => {
     if (!projectId || !rows) return;
     const targets = rows.filter((r) => r.provider === providerId);
@@ -1003,16 +1035,18 @@ export function ModelsPage() {
   };
 
   return (
-    <div className="h-full overflow-y-auto p-4 md:p-6">
+    <div className={embedded ? "" : "h-full overflow-y-auto p-4 md:p-6"}>
       <div className="mx-auto max-w-5xl">
         <div className="mb-4">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <h1 className="flex items-center gap-1.5 text-xl font-semibold">
-              {S.models.title}
-              {!isOwner && (
-                <InfoPopover label={S.models.title}>{S.models.readOnlyHint}</InfoPopover>
-              )}
-            </h1>
+            {!embedded && (
+              <h1 className="flex items-center gap-1.5 text-xl font-semibold">
+                {S.models.title}
+                {!isOwner && (
+                  <InfoPopover label={S.models.title}>{S.models.readOnlyHint}</InfoPopover>
+                )}
+              </h1>
+            )}
             {/* The header holds search plus the owner-only "sync presets" action (add-model
                 entry points live in each group header); on narrow screens (flex-wrap wraps it
                 to its own line) the search box shrinks flexibly, fixed width at >=sm. */}
@@ -1051,6 +1085,20 @@ export function ModelsPage() {
                       <span className="sr-only"> · {syncNote}</span>
                     </>
                   )}
+                </Button>
+              )}
+              {/* The other source of models, beside the built-in catalog: copy what the common
+                  configuration scope holds. Owner-only like the sync above, and absent while the
+                  common scope itself is selected — it is the source of this import, not its
+                  target. */}
+              {isOwner && !commonScope && (
+                <Button
+                  size="sm"
+                  onClick={() => void importFromCommon()}
+                  disabled={importing || rows === null}
+                  title={S.models.importCommonHint}
+                >
+                  {S.models.importCommon}
                 </Button>
               )}
             </div>

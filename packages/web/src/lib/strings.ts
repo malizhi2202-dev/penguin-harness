@@ -34,6 +34,25 @@ export const zh = {
     unpinGroup: "取消置顶",
   },
 
+  /**
+   * The common configuration scope: the reserved, non-Project scope an administrator configures
+   * once for the whole data root (Models, Agent templates, the default plugin set). Its one
+   * surface is the System settings page's global sections, which read it through their own
+   * pinned context; everything user-facing about it lives here.
+   */
+  commonScope: {
+    /** The scope's own name — the app's label for the scope, and the synthesized current scope's name under the pinned Provider. */
+    label: "公共配置",
+    /** Agents page, common scope: what a template is and where it is used. */
+    agentsTitle: "Agent 模板",
+    agentsHint:
+      "这里的 Agent 是模板：Project 中新建 Agent 时可以复制它的配置、提示词、技能与钩子；复制之后两边互不影响。",
+    /** Agent settings page, common scope: the tabs that are absent, and why. */
+    tabsHidden: "记忆、密钥与定时任务不会随模板复制到新 Agent，因此这里不提供。",
+    /** Stands in for an "open a chat" action in the common scope, where no conversation can exist. */
+    chatUnavailable: "公共配置里没有对话：复制提示词后，在 Project 的对话中使用。",
+  },
+
   /** Machines page: the server's own ssh hosts, and installing this build on one. */
   machines: {
     pageTitle: "机器",
@@ -126,6 +145,8 @@ export const zh = {
     /** Rail headings: the viewer's own preferences vs. the whole server's. */
     groupPersonal: "个人",
     groupServer: "服务器",
+    /** The common configuration scope's surfaces, below the server's: data-root-wide, shared by every Project. */
+    groupGlobal: "全局配置",
     /** Personal pages of the settings dialog. */
     generalTitle: "通用",
     appearanceTitle: "外观",
@@ -150,6 +171,11 @@ export const zh = {
     proxyAddress: "代理地址",
     proxyAddressPlaceholder: "留空 = 跟随系统代理",
     /** Admin-only sub-page (server-global). */
+    /** The three common-scope pages' "?" lines: what each surface holds, and who it reaches. */
+    commonAgentsInfo: "公共作用域里的 Agent 模板：新建 Agent 时可以直接选一份复制过去",
+    commonPluginsInfo: "库里的插件，以及新建 Agent 在没有指定时默认装上的那一组",
+    commonModelsInfo: "公共模型表（含凭证）：新建 Project 时复制一份，之后各自独立",
+
     uploadLimitsTitle: "上传限制",
     /** Its two number fields, both in whole MB. */
     attachmentMaxMb: "单个附件上限（MB）",
@@ -417,6 +443,8 @@ export const zh = {
     displayNameHint: "留空则使用 Project id 作为名称",
     settings: "Project 设置",
     settingsTitle: "Project 设置",
+    /** Switcher menu row: this Project is someone else's (the owner's own rows carry no tag, and the current one carries a check instead). */
+    roleMember: "成员",
     members: "成员",
     addMember: "添加成员",
     removeMember: "移除",
@@ -487,7 +515,18 @@ export const zh = {
     createPluginsPlaceholder: "未选择插件",
     createPluginsPicked: (n: number): string => `已选 ${n} 个插件`,
     createPluginsHint: "创建时安装到该 Agent（技能与钩子包），之后可在其「技能」「钩子」标签页增删",
+    /** Shown while the common default set is pre-selected and untouched: where the picks came from, and that clearing them is a real choice. */
+    createPluginsDefaultHint: "已按公共配置的「默认插件」预选；清空表示这个 Agent 不装任何插件",
     createPluginsEmpty: "插件库暂无可安装的插件",
+    /** Create dialog's optional common-scope template: the new Agent starts as a copy of it. */
+    createTemplate: "从模板创建",
+    createTemplatePick: "选择模板",
+    /** The picker's first row: no template, a blank Agent (the pre-existing behavior). */
+    createTemplateEmpty: "不用模板（空白 Agent）",
+    createTemplateHint:
+      "模板会复制它的配置、提示词、技能与钩子；上面填写的名称与描述优先，其余保持独立，之后互不影响",
+    /** Replaces the seed fields while a template is selected (the template's own Skills and hooks are the copy's). */
+    createTemplateSkillsOff: "已选模板：它自带技能与钩子，插件与技能目录不再参与创建",
     /** The directory-skills picker's trigger (the field's own label is createDirSkills). */
     createSkillsPlaceholder: "未选择技能",
     createSkillsPicked: (n: number): string => `已选 ${n} 个技能`,
@@ -747,6 +786,13 @@ export const zh = {
       "用内置目录更新预置模型：新增缺失条目、以目录字段为准刷新差异；本地新增模型与 API key 保持不变",
     syncDone: (added: number, updated: number) => `预置模型已同步：新增 ${added}、更新 ${updated}`,
     syncUpToDate: "预置模型已是最新",
+    /** Owner-only header action (Project scope): copy the common scope's Model table into this Project. */
+    importCommon: "从公共配置导入",
+    importCommonHint:
+      "把公共配置里的模型复制到当前 Project：只补充本 Project 缺少的，同名模型（provider + 模型 ID 相同）保留本 Project 自己的配置与密钥",
+    importCommonDone: (n: number): string => `已从公共配置导入 ${n} 个模型`,
+    importCommonNone: "本 Project 已包含公共配置里的全部模型，没有需要导入的",
+    importCommonEmpty: "公共配置里还没有模型，请先在公共配置中添加模型",
     homepage: "模型主页",
     speedTest: "测速",
     speedTestTitle: "分组测速",
@@ -1163,6 +1209,16 @@ export const zh = {
     uninstallConfirmTitle: (name: string): string => `卸载 ${name}`,
     uninstallConfirmBody: (plugin: string, agent: string): string =>
       `确定从 ${agent} 卸载 ${plugin} 吗？其已安装的技能与钩子文件（含本地改动）将被删除。`,
+
+    /** Common scope: the default plugin set a newly created Agent is seeded with. */
+    defaultsTitle: "新建 Agent 的默认插件",
+    defaultsDesc:
+      "创建 Agent 时若没有挑选插件，就按这份列表安装（每个插件带它的技能与钩子包）。创建时勾选或清空都会覆盖这份默认值——清空表示该 Agent 不装任何插件。留空即无默认。",
+    defaultsPlaceholder: "未选择默认插件",
+    /** Attention strip listing names the library no longer carries; the rest of the editor keeps working. */
+    defaultsUnknown: (names: readonly string[]): string =>
+      `插件库中已不存在：${names.join("、")}。保存时会把这些名称一并移除。`,
+    defaultsSaved: "默认插件已保存",
   },
 
   /** Agent settings "Hooks" tab (features/agents/hooks-tab.tsx): the hook packages installed on one Agent. */
@@ -2426,6 +2482,14 @@ Benchmark：
       member_not_found: "该用户不是本 Project 的成员。",
       already_member: "该用户已是本 Project 的成员。",
       already_owner: "该用户已是本 Project 的所有者。",
+      // The data root keeps the id `common` for the common configuration scope: naming a new
+      // Project that is refused, and an older data root that already has one blocks the scope
+      // entirely. The remedy is a data-root operation (a Project's id is immutable through every
+      // UI), which is what these two sentences have to say.
+      reserved_project_id:
+        "该 id 由数据根目录保留：「common」是公共配置作用域，不能用作 Project id。",
+      common_scope_conflict:
+        "数据根目录里有一个 id 为「common」的 Project，公共配置因此暂不可用。删掉该 Project，或把它的 id 与 <root>/common 目录一并改掉，即可启用公共配置。",
       memory_import_confirm_required: "本次导入会覆盖或删除已有记忆，请确认后继续。",
       schedule_exists: "已存在同名定时任务。",
       schedule_not_found: "该定时任务已不存在。",

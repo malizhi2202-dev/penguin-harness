@@ -8,8 +8,19 @@
 import { useEffect } from "react";
 import { S } from "./strings";
 
-export function useDocumentTitle(title: string | null | undefined): void {
+export function useDocumentTitle(
+  title: string | null | undefined,
+  /**
+   * False leaves the tab title to whoever set it last: a page rendered inside the settings dialog
+   * (see `embedded` on the three common-scope pages) is not a destination, and naming the tab
+   * after it would outlive the dialog, since the page that owns the route does not re-run its own
+   * title effect when the dialog closes.
+   */
+  options?: { enabled?: boolean },
+): void {
+  const enabled = options?.enabled ?? true;
   useEffect(() => {
+    if (!enabled) return;
     document.title = title ? `${title} · ${S.appName}` : S.appName;
-  }, [title]);
+  }, [title, enabled]);
 }

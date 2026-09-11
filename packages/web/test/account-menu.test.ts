@@ -96,10 +96,10 @@ describe("the sidebar user menu", () => {
 
   it("reaches the settings it no longer holds through one ungated System settings entry", () => {
     // The preference rows, change password and user management all moved into the settings
-    // dialog, whose own section registry decides which pages this viewer sees — so the row
+    // page, whose own section registry decides which pages this viewer sees — so the row
     // itself carries no isAdmin test, or a non-admin would lose the personal pages along
     // with the admin ones.
-    expect(source).toContain("setSettingsOpen(true)");
+    expect(source).toContain('navigate("/settings")');
     expect(source).not.toContain("offersChangePassword");
     expect(source).not.toContain("S.settings.language");
     expect(source).not.toContain("S.settings.theme");
@@ -107,7 +107,7 @@ describe("the sidebar user menu", () => {
     expect(source).not.toContain('go("/admin/users")');
   });
 
-  it("mounts no dialog for a surface the settings dialog owns", () => {
+  it("mounts no dialog for a surface the settings page owns", () => {
     // A stale mount would be a build failure rather than a silent one, but the menu
     // keeping an opener for a surface reachable elsewhere is the regression worth naming.
     expect(source).not.toContain("ProxySettingsDialog");

@@ -24,6 +24,7 @@ import type {
 import type { ToolDefinitionConfig, ToolPermission } from "@prismshadow/penguin-core/interfaces";
 import * as api from "../../api/endpoints";
 import { ApiError } from "../../api/client";
+import { COMMON_AGENTS_SECTION } from "../../lib/settings-sections";
 import { S } from "../../lib/strings";
 import { apiErrorText } from "../../lib/api-error";
 import { useDocumentTitle } from "../../lib/use-document-title";
@@ -109,6 +110,12 @@ export function resolveTabKey<K extends string>(
   return tabs.some((t) => t.key === raw) ? (raw as K) : fallback;
 }
 
+/**
+ * Tab keys the common configuration scope does not offer, because their content is not part of
+ * what a template copy carries (see the comment at the call site).
+ */
+const TEMPLATE_ABSENT_TABS: ReadonlySet<TabKey> = new Set<TabKey>(["memory", "vault", "schedules"]);
+
 export function AgentSettingsPage() {
   // Read inside the component: after a language switch remount, this picks up the current dictionary.
   const TABS = [
@@ -126,15 +133,26 @@ export function AgentSettingsPage() {
   const params = useParams<{ agentId: string }>();
   const agentId = params.agentId ?? "";
   useDocumentTitle(S.agent.settings);
-  const { currentProject, reloadAgents } = useProject();
+  const { currentProject, commonScope, reloadAgents } = useProject();
   const projectId = currentProject?.projectId ?? null;
+  /**
+   * Tabs absent in the common configuration scope: a template copy carries the Agent's
+   * *behavior* — config, prompt, Skills, hooks — and deliberately leaves the vault, that Agent's
+   * own memory and its timed work behind (core's copyAgentStateFrom). Editing them on a template
+   * would therefore change nothing about what Project Agents get, so offering the tabs would
+   * promise something the copy does not do. The strip says so below.
+   */
+  const tabs: ReadonlyArray<{ key: TabKey; label: string }> = commonScope
+    ? TABS.filter((t) => !TEMPLATE_ABSENT_TABS.has(t.key))
+    : TABS;
 
   const [data, setData] = useState<AgentConfigResponse | null>(null);
   // ?tab= deep link (from the Agents page's stat icons): a valid key lands the page on that
-  // tab; missing/unknown values fall back to "overview", exactly the previous behavior.
+  // tab; missing/unknown values fall back to "overview", exactly the previous behavior. A key
+  // this scope does not offer (a link carried over from a Project) falls back the same way.
   const [searchParams, setSearchParams] = useSearchParams();
   const [tab, setTab] = useState<TabKey>(() =>
-    resolveTabKey(searchParams.get("tab"), TABS, "overview"),
+    resolveTabKey(searchParams.get("tab"), tabs, "overview"),
   );
   /** Switch tab and mirror it into `?tab=` (replace history entry, keep other params) so the address stays shareable. */
   const switchTab = useCallback(
@@ -151,6 +169,12 @@ export function AgentSettingsPage() {
     },
     [setSearchParams],
   );
+  // A tab that this scope does not offer — carried over from a ?tab= link into a Project, or
+  // held while the scope switched under the page — falls back to the first tab instead of
+  // leaving the strip with nothing selected above a panel no tab claims.
+  useEffect(() => {
+    if (commonScope && TEMPLATE_ABSENT_TABS.has(tab)) switchTab("overview");
+  }, [commonScope, tab, switchTab]);
   // Only the initial config load failure renders inline (the page can't show without it); saves/imports report via toast.
   const [error, setError] = useState<string | null>(null);
 
@@ -258,7 +282,10 @@ export function AgentSettingsPage() {
         <Button
           variant="ghost"
           size="sm"
-          onClick={() => navigate("/agents")}
+          // Back where the reader came from: the common scope's templates live in the settings
+          // section, whose editor route this page is (see the router), so the Project list is not
+          // the surface behind this page there.
+          onClick={() => navigate(commonScope ? `/settings/${COMMON_AGENTS_SECTION}` : "/agents")}
           className="-ml-2 mb-3 text-gray-500 dark:text-gray-400"
         >
           <GlyphIcon d="M15 18l-6-6 6-6M9 12h12" size={ICON_SIZE.rowLead} />
@@ -269,7 +296,7 @@ export function AgentSettingsPage() {
         {/* The kernel update action lives in the Overview tab's Kernel section, so the trail
             from the Agents list has to cross the tab strip to reach it. */}
         <Tabs
-          items={TABS.map((t) =>
+          items={tabs.map((t) =>
             t.key === "overview" && data.config.kernelOutdated
               ? { ...t, badge: S.agent.kernelOutdatedHint }
               : t,
@@ -277,6 +304,12 @@ export function AgentSettingsPage() {
           active={tab}
           onChange={switchTab}
         />
+        {/* Why three tabs are missing here: stated once, where they would have been. */}
+        {commonScope && (
+          <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
+            {S.commonScope.tabsHidden}
+          </p>
+        )}
         <div className="py-4">
           {tab === "overview" && (
             <OverviewTab

@@ -76,7 +76,7 @@ export function SkillsTab({
   const navigate = useNavigate();
   const { locale } = useLocale();
   const userId = useAuth().user?.userId ?? null;
-  const { currentProject, agents, setCurrentAgentId, reloadAgents } = useProject();
+  const { currentProject, commonScope, agents, setCurrentAgentId, reloadAgents } = useProject();
   const projectId = currentProject?.projectId ?? null;
   // Prompt-injection controls (toggle / template alert / prompt editor): member-level like
   // every other mutation on this tab.
@@ -407,9 +407,20 @@ export function SkillsTab({
                   {S.skills.importCopyPrompt}
                 </Button>
                 <CopiedStatus copied={promptCopy.copied} />
-                <Button size="sm" variant="primary" onClick={openChat}>
-                  {S.skills.importOpenChat}
-                </Button>
+                {/* "Open a chat with this prompt" needs a conversation, and the common
+                    configuration scope runs none (the server refuses to create a Session on the
+                    reserved id). The copy button above still works, so the section keeps its one
+                    usable action and says where the prompt goes instead of offering a button
+                    that could only land on the notice. */}
+                {commonScope ? (
+                  <p className="self-center text-xs text-gray-500 dark:text-gray-400">
+                    {S.commonScope.chatUnavailable}
+                  </p>
+                ) : (
+                  <Button size="sm" variant="primary" onClick={openChat}>
+                    {S.skills.importOpenChat}
+                  </Button>
+                )}
               </div>
             </div>
           </section>

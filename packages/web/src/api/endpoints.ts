@@ -32,6 +32,10 @@ import type {
   ChatDefaultsDto,
   CommandPolicyDto,
   CommandPolicyRuleDto,
+  CommonAgentTemplatesResponse,
+  CommonModelImportResult,
+  CommonPluginsResponse,
+  CommonPluginsUpdateRequest,
   DefaultModelResponse,
   DefaultModelUpdateRequest,
   DirectorySkillsResponse,
@@ -222,6 +226,38 @@ export const removeMember = (projectId: string, username: string) =>
   apiFetch<void>(
     `/api/projects/${encodeURIComponent(projectId)}/members/${encodeURIComponent(username)}`,
     { method: "DELETE" },
+  );
+
+// Common configuration scope (`/api/common`) ---------------------------------------------
+
+/**
+ * The common scope's default plugin set: what a newly created Agent is seeded with when its
+ * creator picks nothing. Readable by any signed-in user — every member creating an Agent is
+ * subject to it — while the write below is admin-only.
+ */
+export const getCommonPlugins = () => apiFetch<CommonPluginsResponse>("/api/common/plugins");
+
+/**
+ * Replaces the whole default set (admin only, 404 for anyone else). A name the library no
+ * longer carries answers 400 rather than being stored — the response echoes the stored set.
+ */
+export const putCommonPlugins = (body: CommonPluginsUpdateRequest) =>
+  apiFetch<CommonPluginsResponse>("/api/common/plugins", { method: "PUT", body });
+
+/** The common scope's Agent templates, for the create-Agent dialog's picker (any signed-in user). */
+export const getCommonAgentTemplates = () =>
+  apiFetch<CommonAgentTemplatesResponse>("/api/common/agent-templates");
+
+/**
+ * Copies the common Model table into this Project (owner): append-only, and an entry the
+ * Project already carries under the same `(provider, modelId)` pair keeps its own credential.
+ * 409 `no_common_models` when the common scope has no models at all; `addedCount` may be 0
+ * when the Project already had every one of them.
+ */
+export const importCommonModels = (projectId: string) =>
+  apiFetch<CommonModelImportResult>(
+    `/api/projects/${encodeURIComponent(projectId)}/models/import-common`,
+    { method: "POST", body: {} },
   );
 
 /** New-chat defaults ([default_chat]): member-readable prefill for the draft page. */

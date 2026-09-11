@@ -3,7 +3,7 @@ title: Configuration Reference
 description: Complete field reference for environment variables, Project config, Agent config, the Vault, and Schedules.
 ---
 
-PenguinHarness configuration has three layers: environment variables shape the deployment, the Project config manages models and credentials, and the Agent config defines a single Agent's behavior. Each Agent additionally has two kinds of state files: the Vault (private environment variables) and Schedules (timed tasks).
+PenguinHarness configuration has three layers: environment variables shape the deployment, the Project config manages models and credentials, and the Agent config defines a single Agent's behavior. Above them sits an optional common configuration scope (`<root>/common/`) that is configured once and drawn on by every Project. Each Agent additionally has two kinds of state files: the Vault (private environment variables) and Schedules (timed tasks).
 
 ## Environment variables
 
@@ -20,7 +20,7 @@ The CLI and the server automatically load a `.env` file from the working directo
 | `PENGUIN_TRUST_PROXY` | `1` trusts the `x-forwarded-proto` header — set it behind a reverse proxy that terminates TLS (and sets/strips the header itself) so session cookies are marked `Secure` and the hot-update network gate sees HTTPS | unset — the header is ignored |
 | `PENGUIN_SEED_ADMIN_PASSWORD` | Fixed initial password for the seeded built-in admin (automated tests / e2e) | unset — the seed generates a random password, hashed and discarded unseen; the account is claimed through the first-login link |
 | `PENGUIN_LANG` | CLI language (`en` / `zh`), set via `penguin config lang` | `en` |
-| `PENGUIN_UPDATE_CHECK` | `off` disables the web app's new-release check (the server's only outbound internet call) | enabled |
+| `PENGUIN_UPDATE_CHECK` | `off` disables the web app's new-release check (the server's only outbound internet call); the account menu then has no "check for updates" row either | enabled |
 | `PENGUIN_NO_LOGIN_SHELL_ENV` | Any non-empty value stops the desktop app from importing the login shell's environment on macOS/Linux GUI launches (see [Desktop quickstart](/quickstart-desktop)) | unset — the import runs, filling only variables the launch left unset |
 | `PENGUIN_CLI_ENTRY` | The CLI entry script this installation offers the Agents it runs (see below) | set for you by `penguin server` / `penguin web` and by the desktop app; falls back to the checkout's own `packages/cli/dist/penguin.js` when the server was started from one |
 
@@ -135,6 +135,34 @@ This is an **accident guardrail, not a security boundary**, and that is a statem
 What it does buy is that a destructive one-liner does not run by accident, in either of the two ways a model reaches a shell, in either the POSIX or the Windows spelling, under any approval mode. That is a speed bump, and a speed bump is worth having in front of an irreversible command. For an actual boundary — a process that *cannot* reach the rest of the filesystem regardless of what it runs — the mechanism is confinement (bubblewrap, dsh), which is a separate layer this policy complements rather than replaces.
 
 Manage it from the Security policy tab of Project Settings in the Web App (owner-only to edit; members see the effective policy).
+
+## Common config
+
+`<root>/common/` is this machine's **common configuration scope**: configure it once and every Project on the data root draws on it. Its path layout is the same as a Project's — the same loaders, the same file formats — but it is not a Project. It only reuses that layout:
+
+| Path | Contents |
+| --- | --- |
+| `<root>/common/.project_config.toml` | The common Model table, with exactly the fields of a Project's [same-named file](#project-config) |
+| `<root>/common/agents/<agentId>/agent_state/…` | A common Agent template — an ordinary Agent State directory |
+| `<root>/common/plugins.toml` | The common default plugin set: `default_plugins = ["goal", "…"]` |
+
+`common` is a reserved id: it never appears in the Project list, cannot be created, renamed or deleted, and no Session can be started inside it — the Agents there are templates to copy, not Agents to run. In the Web App it is not in the Project switcher (it is not a Project) and is never the app's current scope: an administrator opens **System settings → Global config** (a group of its own below the server's, administrators only) and the scope's three surfaces are right there — Plugin Library, Models, Agents: those very Project pages, opened by the settings page with the common config as their scope, while the sidebar and the switcher stay in the Project you were in. Leaving the group needs no switching back.
+
+The scope's Agent list starts with a `default_agent` (General Agent): the first read of the scope on a data root initializes it from the built-in preset, the same way creating a Project does (preinstalled library plugins included), so it can be edited in place or left as one template among several. It is a template — it never updates itself, and no Project's General Agent is copied into it. Apart from that, **with no `common/` directory nothing changes at all**: the directory appears only once the scope is genuinely read, and a new Project still starts from the built-in presets.
+
+The three things it holds inherit by three different rules, and that difference is the point of the scope:
+
+**Models are copied.** A new Project is seeded with the whole common table copied over — credentials included, so the Project is usable the moment it appears (and a common scope with no models still falls back to the built-in presets). Models added to the common side later are pulled into an existing Project with the models page's "Import from common". Copied means copied: the two sides are independent from then on, editing either leaves the other alone, and an import only appends — an entry the Project already carries under the same `(provider, model_id)` pair is never overwritten.
+
+**Agent templates are copied.** Creating an Agent from a common template copies that Agent's *behavior* — `system_config.yaml`, `AGENTS.md`, `skills/`, `hooks/`, `tools/` — while `.vault.toml` (credentials), `memory/` (its own memory) and `schedule/` (its timed work) stay behind: secrets, personal memory and timed work are not behavior. The copy has no link back to the template afterwards, so editing either side is free. A `name` / `description` given at creation overrides the template's; without one the new Agent keeps its own id — the template names itself, not its copies.
+
+**The default plugin set applies when nothing was chosen.** The names in `plugins.toml` are installed on a newly created Agent whose creator **selected no plugins** (installed in the file's order). An explicit empty list means "no plugins for this one" and does not apply them; an Agent imported from a snapshot carries its own skills and hooks and does not apply them either; and an Agent created from a template is already fully described by that template, so the default set is not layered on top. A missing file means "no defaults", which is exactly what creating a plain new Agent did before.
+
+Only an administrator can read or write the scope through the ordinary Project routes; for a member, `/api/projects/common/…` answers 404 just like a Project they have no access to. Two reads stay open to members: `GET /api/common/plugins` (the default plugin set) and `GET /api/common/agent-templates` (the template list the create dialog offers). Models and Agent templates have no dedicated routes of their own — they are the ordinary Project routes with the reserved id.
+
+A data root that predates this scope can already carry a Project whose id is `common` (creation refuses the id from this release on), and that Project's directory is the very one the scope uses. The collision leaves that Project untouched — its owner and members keep using it, with Sessions, rename and delete all as before — and simply disables the scope for as long as it lasts: the related reads and writes answer 409 `common_scope_conflict`, and the Web App offers no common-config entry. To enable the scope, delete that Project, or — when its data has to be kept — stop the server, change the `project_id` of its row in `web.db`'s `projects` table and rename `<root>/common` to match, then start again.
+
+The CLI's `--project-id` takes the reserved id too: `penguin config model add … --project-id common` edits the common Model table (the CLI works directly on this machine's data root, with the same authority as editing that file by hand).
 
 ## Agent config
 

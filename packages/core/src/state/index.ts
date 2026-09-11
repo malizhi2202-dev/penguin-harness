@@ -13,6 +13,7 @@ export * from "./model-catalog.js";
 // serves both; the matcher that reads them is core-internal).
 export * from "./command-policy-defaults.js";
 export * from "./project-config.js";
+export * from "./common-config.js";
 export * from "./agent-state.js";
 export * from "./agent-vault.js";
 export * from "./memory.js";

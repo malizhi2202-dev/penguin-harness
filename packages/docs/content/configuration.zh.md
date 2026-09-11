@@ -3,7 +3,7 @@ title: 配置参考
 description: 环境变量、Project 配置、Agent 配置、Vault 与定时任务的完整字段参考。
 ---
 
-PenguinHarness 的配置分三层：环境变量决定部署形态，Project 配置管理模型与凭证，Agent 配置定义单个 Agent 的行为。此外每个 Agent 还有 Vault（私有环境变量）与 Schedule（定时任务）两类状态文件。
+PenguinHarness 的配置分三层：环境变量决定部署形态，Project 配置管理模型与凭证，Agent 配置定义单个 Agent 的行为。三层之上还有一个可选的公共配置作用域（`<root>/common/`），配置一次供所有 Project 取用。此外每个 Agent 还有 Vault（私有环境变量）与 Schedule（定时任务）两类状态文件。
 
 ## 环境变量
 
@@ -20,7 +20,7 @@ CLI 与服务端启动时会自动加载工作目录下的 `.env` 文件。
 | `PENGUIN_TRUST_PROXY` | 设为 `1` 信任 `x-forwarded-proto` 请求头——在终结 TLS 的反向代理（且由代理自行设置/清除该头）之后设置，使会话 Cookie 带 `Secure` 标记、热更新网络门禁识别 HTTPS | 未设置，忽略该请求头 |
 | `PENGUIN_SEED_ADMIN_PASSWORD` | 固定内置管理员的种子初始密码（自动化测试 / e2e 使用） | 未设置，种子时随机生成一个密码，哈希后即丢弃、无人见过；账号通过首次登录链接认领 |
 | `PENGUIN_LANG` | CLI 语言（`en` / `zh`），用 `penguin config lang` 设置 | `en` |
-| `PENGUIN_UPDATE_CHECK` | 设为 `off` 关闭 Web 应用的新版本检查（服务端唯一的对外网络请求） | 开启 |
+| `PENGUIN_UPDATE_CHECK` | 设为 `off` 关闭 Web 应用的新版本检查（服务端唯一的对外网络请求）；该状态下账号菜单里也不再出现「检查更新」一行 | 开启 |
 | `PENGUIN_NO_LOGIN_SHELL_ENV` | 任意非空值可禁止桌面版在 macOS/Linux 图形界面启动时导入登录 shell 环境变量（见[桌面版速上手](/quickstart-desktop)） | 未设置，导入开启，且只补启动环境中缺失的变量 |
 | `PENGUIN_CLI_ENTRY` | 本安装提供给其所运行 Agent 的 CLI 入口脚本（见下文） | 由 `penguin server` / `penguin web` 与桌面版自动设置；若服务端从仓库检出启动，则回退到该检出的 `packages/cli/dist/penguin.js` |
 
@@ -135,6 +135,34 @@ enabled = false
 它换来的是：毁灭性单行命令不会被误跑——模型碰到 shell 的两条路都算，POSIX 与 Windows 两种写法都算，任何审批模式下都算。这是一道减速带，而在不可逆的命令前面，减速带是值得有的。要真正的边界——一个无论跑什么都碰不到文件系统其余部分的进程——机制是进程隔离（bubblewrap、dsh），那是另一层，本策略与之互补而非替代。
 
 在 Web App Project 设置的「安全策略」页管理（仅 owner 可改；成员只读展示生效策略）。
+
+## 公共配置
+
+`<root>/common/` 是这台机器上的**公共配置作用域**：配置一次，供本数据根目录下的所有 Project 取用。它的路径布局与 Project 相同——同一套加载器、同一套文件格式——但它不是 Project，只是复用了那套目录约定：
+
+| 路径 | 内容 |
+| --- | --- |
+| `<root>/common/.project_config.toml` | 公共模型表，字段与 Project 的[同名文件](#project-配置)完全一致 |
+| `<root>/common/agents/<agentId>/agent_state/…` | 公共 Agent 模板，就是普通的 Agent State 目录 |
+| `<root>/common/plugins.toml` | 公共默认插件集：`default_plugins = ["goal", "…"]` |
+
+`common` 是保留 id：它不出现在 Project 列表里，也不能被创建、改名或删除，更不能在里面开 Session——那里的 Agent 是拿来做模板的，不是拿来跑的。Web App 里它不在项目切换器里（它不是 Project），也从来不是应用当前作用域：管理员打开**系统设置 → 全局配置**（服务器分组下方的另一个分组，仅管理员可见），那里直接就是它的三个界面——插件库 / 模型库 / 智能体（就是 Project 的那三个页面，只是由设置页带着公共作用域打开；侧边栏与项目切换器始终停在你原来的 Project，离开这一组分区即可）。
+
+公共作用域的 Agent 列表开箱即有一个 `default_agent`（General Agent）：数据根目录下第一次读取该作用域时，会像创建 Project 时那样用内置预设把它初始化出来（含库中预装插件），你可以在上面直接改，也可以另建模板——它是模板，不会自动更新，也不会把某个 Project 的 General Agent 复制过来。除此之外，**没有 `common/` 目录时所有界面与服务行为与从前完全一致**：目录只在真正用到这个作用域时才出现，新建 Project 仍从内置预设起步。
+
+三样东西各自的继承规则不同，这正是这个作用域的重点：
+
+**模型是拷贝。** 新建 Project 时把公共模型表整份复制过去（凭证一并复制，所以新 Project 立刻可用；公共侧没配模型时仍走内置预设）。公共侧后来新增的模型，用 Web App 模型页的「从公共导入」收进已有 Project。复制就是复制：此后两边各自独立，改公共侧不影响已导入的 Project，改 Project 也不影响公共侧；导入只追加，Project 已有的同名 `(provider, model_id)` 条目不覆盖。
+
+**Agent 模板是拷贝。** 在 Project 里从公共模板新建 Agent 时，复制的是这个 Agent 的行为——`system_config.yaml`、`AGENTS.md`、`skills/`、`hooks/`、`tools/`——而 `.vault.toml`（凭证）、`memory/`（它自己的记忆）与 `schedule/`（它的定时任务）留在原地：秘密、个人记忆和定时工作都不是行为。复制出的 Agent 与模板再无关联，随便改哪边都行。创建时填的 `name` / `description` 覆盖模板的，不填则用新 Agent 自己的 id——模板命名的是它自己，不是它的副本。
+
+**默认插件集在「没选」时生效。** `plugins.toml` 里的名字是新建 Agent 在创建者**没有选择任何插件**时自动装上的（按文件里的顺序安装）。显式选择空列表表示「这个 Agent 不要插件」，此时不套用默认集；从快照导入的 Agent 自带技能与钩子，同样不套用；从模板创建时模板已经完整描述了这个 Agent，也不叠加默认集。缺文件即「没有默认值」，与从前新建一个空 Agent 的行为一致。
+
+公共作用域只有管理员能通过常规 Project 路由读写；普通成员的 `/api/projects/common/…` 与访问一个无权 Project 一样返回 404。成员仍可读两处：`GET /api/common/plugins`（默认插件集）与 `GET /api/common/agent-templates`（模板清单，供创建对话框选择）。模型与 Agent 模板本身没有专用路由——它们就是带上保留 id 的常规 Project 路由。
+
+早于公共作用域存在的数据根目录里可能已经有一个 id 就叫 `common` 的 Project（自本版本起该 id 被拒绝用于创建），而它的目录正是这个作用域要用的目录。这种撞车不会让那个 Project 受任何影响：它照常归所有者与成员使用，会话、改名、删除一切如旧；只是公共作用域在此期间停用——相关的读写接口返回 409 `common_scope_conflict`，Web App 也不显示公共配置入口。要启用作用域，删掉那个 Project（立即生效），或者——数据需要保留时——停掉服务，把 `web.db` 里 `projects` 行的 `project_id` 与 `<root>/common` 目录一并改成别的 id，再启动。
+
+命令行的 `--project-id` 同样接受这个保留 id：`penguin config model add … --project-id common` 改的就是公共模型表（CLI 直接作用于本机数据根目录，权限与手工编辑该文件相同）。
 
 ## Agent 配置
 

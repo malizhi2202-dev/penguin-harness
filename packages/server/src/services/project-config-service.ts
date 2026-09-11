@@ -28,6 +28,7 @@ import path from "node:path";
 import { parse as parseToml } from "smol-toml";
 import {
   CHAT_APPROVAL_MODES,
+  COMMON_SCOPE_ID,
   atomicWriteFile,
   DEFAULT_CHAT_THINKING_LEVELS,
   DEFAULT_COMMAND_POLICY_RULES,
@@ -39,6 +40,8 @@ import {
   catalogEntryFor,
   defaultProjectConfig,
   imageUrlMessage,
+  mergeCommonModels,
+  missingCommonModels,
   projectConfigFromTable,
   projectConfigPath,
   renderProjectConfigToml,
@@ -49,6 +52,7 @@ import { providerInfo } from "@prismshadow/penguin-core/model-catalog";
 import type {
   CommandPolicyRule,
   LLMOutcome,
+  ModelEntry,
   ModelRef,
   OmniMessage,
   ProjectConfig,
@@ -57,6 +61,7 @@ import type {
   ChatDefaultsDto,
   CommandPolicyDto,
   CommandPolicyRuleDto,
+  CommonModelImportResult,
   EndpointModelListRequest,
   EndpointModelListResponse,
   ModelInfo,
@@ -72,6 +77,8 @@ import type {
   ModelVisionDetectResponse,
 } from "../api/types.js";
 import { badRequest } from "../http/validate.js";
+import { HttpError } from "../http/errors.js";
+import { commonScopeConflict } from "./common-scope.js";
 import { cacheable } from "../internal/mtime-gate.js";
 import { detectModelProtocol } from "./protocol-detect.js";
 import {
@@ -217,6 +224,38 @@ function entryMatches(m: RawTable, provider: string, modelId: string): boolean {
   return m.provider === provider && m.model_id === modelId;
 }
 
+/** The wire form of a paired reference (the DTO spells the second half `modelId`); absent stays absent. */
+function optRefDto(ref: ModelRef | undefined): ModelRefDto | undefined {
+  return ref === undefined ? undefined : { provider: ref.provider, modelId: ref.model_id };
+}
+
+/** Whether two paired references point at the same entry (absent matches only absent). */
+function sameRef(a: ModelRef | undefined, b: ModelRef | undefined): boolean {
+  return a?.provider === b?.provider && a?.model_id === b?.model_id;
+}
+
+/**
+ * The default Model a seeded Project starts with, in preference order: the source's own default
+ * (the common scope's when it has one), then the built-in preset's, then the table's first entry.
+ *
+ * The winner must exist in the table being written: `createSession` rejects a reference outside
+ * it, so seeding a dangling default would hand back a Project that cannot start a single
+ * conversation — the one outcome an unconfigured common scope must never cause.
+ */
+function pickSeededDefault(
+  source: ModelRef | undefined,
+  preset: ModelRef | undefined,
+  models: readonly ModelEntry[],
+): ModelRef | undefined {
+  const carries = (ref: ModelRef | undefined): boolean =>
+    ref !== undefined &&
+    models.some((m) => m.provider === ref.provider && m.model_id === ref.model_id);
+  if (carries(source)) return source;
+  if (carries(preset)) return preset;
+  const first = models[0];
+  return first === undefined ? undefined : { provider: first.provider, model_id: first.model_id };
+}
+
 /** In-process Map/Set key for a paired reference (\0-separated to avoid concatenation ambiguity; never persisted, not an id format). */
 function refKey(provider: string, modelId: string): string {
   return `${provider}\0${modelId}`;
@@ -264,7 +303,18 @@ export class ProjectConfigService {
    */
   private readonly cache = new Map<string, { mtimeMs: number; table: RawTable }>();
 
-  constructor(private readonly root: string) {}
+  /**
+   * @param isCommonScopeBlocked Whether a real Project carries the reserved common-scope id, in
+   * which case the scope is unavailable (see ProjectService.isCommonScopeBlocked) and the common
+   * table must not be read as one: its file *is* that Project's own config file. Injected as a
+   * predicate rather than a value because the answer can change while the server runs (the Project
+   * may be renamed, or deleted). Defaults to "never blocked", which is every data root that has no
+   * such Project.
+   */
+  constructor(
+    private readonly root: string,
+    private readonly isCommonScopeBlocked: () => boolean = () => false,
+  ) {}
 
   private filePath(projectId: string): string {
     return projectConfigPath(this.root, projectId);
@@ -353,26 +403,71 @@ export class ProjectConfigService {
   }
 
   /**
-   * Initial config for a newly created Project: display name + preset built-in
-   * model catalog (the default model and all preset entries, sourced from the same
-   * core defaultProjectConfig; a gateway model's base_url is already inlined on the
-   * entry, with no key); users only need to fill in an API key as needed (leave it
-   * blank to fall back to the provider's environment variable).
+   * The common configuration scope's config, or **null** when this data root has none (no
+   * `<root>/common/.project_config.toml`) or it carries no models at all.
+   *
+   * The distinction matters and is why this doesn't just call `loadConfig(COMMON_SCOPE_ID)`:
+   * that call answers a missing file with the *built-in catalog presets*, which would make an
+   * unconfigured common scope look like a configured one and silently turn "no common models"
+   * into "seed every Project with the presets" — the same thing by accident, but no longer
+   * distinguishable at the call site that has to report it.
+   */
+  private async commonModelsOrNull(): Promise<ProjectConfig | null> {
+    // A blocked scope reads as "no common models": its file is a real Project's config in that
+    // case, and seeding from it would hand every new Project that Project's credentials.
+    if (this.isCommonScopeBlocked()) return null;
+    const table = await this.readTable(COMMON_SCOPE_ID);
+    if (table === null) return null;
+    const cfg = projectConfigFromTable(this.filePath(COMMON_SCOPE_ID), table);
+    return cfg.models.length > 0 ? cfg : null;
+  }
+
+  /**
+   * The Model table a newly created Project starts with: a **copy** of the common scope's table
+   * when the data root has one, otherwise the built-in catalog presets. Either way the Project
+   * owns what it receives from that moment on — later edits on the common side never travel into
+   * an existing Project, which imports on demand instead (`importCommonModels`).
+   */
+  private async modelSeed(): Promise<ProjectConfig> {
+    const preset = defaultProjectConfig();
+    const common = await this.commonModelsOrNull();
+    if (common === null) return preset;
+    const merged = mergeCommonModels(common, { models: [] });
+    const defaultModel = pickSeededDefault(
+      merged.default_model,
+      preset.default_model,
+      merged.models,
+    );
+    return {
+      // Factory command-policy rules are seeded exactly like the model presets: copied in at
+      // creation, owned by the Project from then on. They are not part of the common scope.
+      ...(preset.command_policy !== undefined ? { command_policy: preset.command_policy } : {}),
+      models: merged.models,
+      ...(defaultModel !== undefined ? { default_model: defaultModel } : {}),
+      ...(merged.vision_model !== undefined ? { vision_model: merged.vision_model } : {}),
+    };
+  }
+
+  /**
+   * Initial config for a newly created Project: display name + the seeded Model table — a copy
+   * of the common scope's when this data root has one, otherwise the preset built-in catalog
+   * (the default model and all preset entries; a gateway model's base_url is already inlined on
+   * the entry, with no key). Users only need to fill in an API key as needed (leave it blank to
+   * fall back to the provider's environment variable).
    */
   async writeInitialConfig(projectId: string, name: string): Promise<void> {
-    const preset = defaultProjectConfig();
+    const preset = await this.modelSeed();
     await this.writeRaw(projectId, {
       name,
       ...(preset.default_model !== undefined ? { default_model: preset.default_model } : {}),
-      // The factory command-policy rules are seeded exactly like the model presets:
-      // copied in at creation, owned by the project from then on.
       ...(preset.command_policy !== undefined ? { command_policy: preset.command_policy } : {}),
+      ...(preset.vision_model !== undefined ? { vision_model: preset.vision_model } : {}),
       models: preset.models,
     });
   }
 
   /**
-   * Backfills preset models (for onboarding an existing Project, e.g. the
+   * Backfills the seed models (for onboarding an existing Project, e.g. the
    * `default_project` shared with the CLI when the first user is onboarded — its
    * directory already existed and never went through `writeInitialConfig`, so it
    * previously had no models and no default model).
@@ -385,13 +480,73 @@ export class ProjectConfigService {
   async ensurePresetModels(projectId: string): Promise<void> {
     const raw = await this.readRaw(projectId);
     if (asArray(raw.models).length > 0) return;
-    const preset = defaultProjectConfig();
+    const preset = await this.modelSeed();
     await this.writeRaw(projectId, {
       ...raw,
-      // Also reset to the preset default_model if the existing one points at a now-deleted model, to keep the default model valid.
+      // Also reset to the seeded default_model if the existing one points at a now-deleted model, to keep the default model valid.
       ...(preset.default_model !== undefined ? { default_model: preset.default_model } : {}),
+      ...(preset.vision_model !== undefined ? { vision_model: preset.vision_model } : {}),
       models: preset.models,
     });
+  }
+
+  /**
+   * Copies the common scope's Model table into a Project on demand — the manual counterpart of
+   * the seeding above, for models added to the common scope after this Project was created.
+   *
+   * Copy semantics, both directions of the arrow: entries the Project already carries keep their
+   * own credential and metadata (a shared `(provider, model_id)` key is never overwritten), and
+   * `default_model` / `vision_model` are adopted from the common side only where the Project has
+   * none. Nothing is ever pushed *to* the common scope from here.
+   *
+   * Throws 409 `no_common_models` when the common scope carries no models, so the UI can say why
+   * nothing happened instead of reporting a silent success.
+   */
+  async importCommonModels(projectId: string): Promise<CommonModelImportResult> {
+    if (projectId === COMMON_SCOPE_ID) {
+      throw badRequest("The common scope is the source of this import, not its target.");
+    }
+    if (this.isCommonScopeBlocked()) throw commonScopeConflict();
+    const common = await this.commonModelsOrNull();
+    if (common === null) {
+      throw new HttpError(
+        409,
+        "no_common_models",
+        "The common configuration scope has no models to import.",
+      );
+    }
+    const raw = await this.readRaw(projectId);
+    const project = await this.loadConfig(projectId);
+    const added = missingCommonModels(common, project);
+    const merged = mergeCommonModels(common, project);
+    const defaultChanged = !sameRef(merged.default_model, project.default_model);
+    const visionChanged = !sameRef(merged.vision_model, project.vision_model);
+    if (added.length === 0 && !defaultChanged && !visionChanged) {
+      return {
+        added: [],
+        addedCount: 0,
+        ...(optRefDto(merged.default_model) !== undefined
+          ? { defaultModel: optRefDto(merged.default_model) }
+          : {}),
+        ...(optRefDto(merged.vision_model) !== undefined
+          ? { visionModel: optRefDto(merged.vision_model) }
+          : {}),
+      };
+    }
+    await this.writeRaw(projectId, {
+      ...raw,
+      models: merged.models,
+      ...(merged.default_model !== undefined ? { default_model: merged.default_model } : {}),
+      ...(merged.vision_model !== undefined ? { vision_model: merged.vision_model } : {}),
+    });
+    return {
+      added: added.map((m) => ({ provider: m.provider, modelId: m.model_id })),
+      addedCount: added.length,
+      ...(merged.default_model !== undefined
+        ? { defaultModel: optRefDto(merged.default_model) }
+        : {}),
+      ...(merged.vision_model !== undefined ? { visionModel: optRefDto(merged.vision_model) } : {}),
+    };
   }
 
   /** Project display name (the toml's name; returns undefined if unset, the frontend falls back to displaying the id). */

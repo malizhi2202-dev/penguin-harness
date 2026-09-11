@@ -76,6 +76,7 @@ import { PluginDetailModal } from "./plugin-detail";
 import { formatRelativeDate } from "../../lib/format";
 import { SkillTile } from "../skills/skill-icon-view";
 import { InfoPopover } from "../../components/ui/info-popover";
+import { CommonPluginDefaults } from "./common-plugin-defaults";
 import { ICON_SIZE } from "../../lib/icon-scale";
 
 /**
@@ -195,12 +196,20 @@ export function pluginUpdatePlan(
   return { perAgent, plugins: [...plugins].sort() };
 }
 
-export function PluginsPage() {
-  useDocumentTitle(S.nav.plugins);
+/**
+ * `embedded` renders this page inside the System settings dialog's common-scope panes: the pane
+ * draws the heading and the explanation, so the page drops its own title, scroll box and padding,
+ * and leaves the tab title to the page behind the dialog. The list, the install controls and the
+ * common default-plugin editor are unchanged.
+ */
+export function PluginsPage({ embedded = false }: { embedded?: boolean } = {}) {
+  useDocumentTitle(S.nav.plugins, { enabled: !embedded });
   const navigate = useNavigate();
   const { locale } = useLocale();
-  const userId = useAuth().user?.userId ?? null;
-  const { currentProject, agents, currentAgent, setCurrentAgentId, reloadAgents } = useProject();
+  const user = useAuth().user ?? null;
+  const userId = user?.userId ?? null;
+  const { currentProject, commonScope, agents, currentAgent, setCurrentAgentId, reloadAgents } =
+    useProject();
   const projectId = currentProject?.projectId ?? null;
 
   /** The plugins trail's raised badge, or undefined — the notice under the title acts on it or clears it. */
@@ -446,12 +455,21 @@ export function PluginsPage() {
   };
 
   return (
-    <div className="h-full overflow-y-auto p-4 md:p-6">
+    <div className={embedded ? "" : "h-full overflow-y-auto p-4 md:p-6"}>
       <div className="mx-auto max-w-5xl">
-        <h1 className="flex items-center gap-1.5 text-xl font-semibold">
-          {S.plugins.pageTitle}
-          <InfoPopover label={S.plugins.pageTitle}>{S.plugins.pageDesc}</InfoPopover>
-        </h1>
+        {!embedded && (
+          <h1 className="flex items-center gap-1.5 text-xl font-semibold">
+            {S.plugins.pageTitle}
+            <InfoPopover label={S.plugins.pageTitle}>{S.plugins.pageDesc}</InfoPopover>
+          </h1>
+        )}
+        {/* The common configuration scope's own plugin surface: the default set a newly created
+            Agent is seeded with. It lives here rather than in a page of its own because this is
+            where an admin already looks at plugins, and the library list below is the same list
+            it picks from. Admin-gated on top of the scope test: the scope is admin-only anyway
+            (every /api/projects/common route answers 404 for anyone else), and the write here is
+            the one thing on this page the server would refuse. */}
+        {commonScope && user?.isAdmin === true && <CommonPluginDefaults />}
         {/* Last stop on the plugins trail: what the sidebar's dot was pointing at, the control
             that takes all of it in one press, and the way to clear it for someone who has looked
             and decided to stay on the installed copies. A plugin is never NEW here — one nobody
@@ -607,7 +625,7 @@ function PluginCard({
   onUpdateOutdated: (name: string, agentIds: string[]) => Promise<void>;
 }) {
   const { locale } = useLocale();
-  const { agents, currentAgent } = useProject();
+  const { agents, currentAgent, commonScope } = useProject();
   const [installOpen, setInstallOpen] = useState(false);
   // Agents pending an update confirmation (null = none): an update is an overwriting reinstall, so it needs a confirm + a per-agent version list before it runs.
   const [pendingUpdate, setPendingUpdate] = useState<string[] | null>(null);
@@ -728,7 +746,11 @@ function PluginCard({
             />
           </Button>
         )}
-        {plugin.skills.length > 0 && (
+        {/* Quick start opens a conversation with this plugin's Skill, and the common configuration
+            scope runs none — a template is not something to converse with, and the server refuses
+            a Session on the reserved id. The card keeps its other actions (install/update, the
+            plugin detail) unchanged; only the entry point that would land on the notice is gone. */}
+        {plugin.skills.length > 0 && !commonScope && (
           <Button
             size="sm"
             className="h-8 w-8 shrink-0 justify-center p-0"

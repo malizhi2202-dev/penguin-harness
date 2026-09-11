@@ -30,6 +30,25 @@ export const en: Strings = {
     unpinGroup: "Unpin group",
   },
 
+  /**
+   * The common configuration scope: the reserved, non-Project scope an administrator configures
+   * once for the whole data root (Models, Agent templates, the default plugin set). Its one
+   * surface is the System Settings page's global sections, which read it through their own pinned
+   * context; everything user-facing about it lives here.
+   */
+  commonScope: {
+    /** The app's label for the scope, and the synthesized current scope's name under the pinned Provider. */
+    label: "Common config",
+    /** Agents page, common scope: what a template is and where it is used. */
+    agentsTitle: "Agent templates",
+    agentsHint:
+      "The Agents here are templates: creating an Agent in a Project can copy one's config, prompt, Skills and hooks. Once copied, the two are independent.",
+    tabsHidden:
+      "Memory, vault keys and scheduled tasks are not part of a template copy, so they are not offered here.",
+    chatUnavailable:
+      "There is no chat in the common config scope: copy the prompt and use it in a Project conversation.",
+  },
+
   /** Machines page: the server's own ssh hosts, and installing this build on one. */
   machines: {
     pageTitle: "Machines",
@@ -116,6 +135,8 @@ export const en: Strings = {
     /** Rail headings: the viewer's own preferences vs. the whole server's. */
     groupPersonal: "Personal",
     groupServer: "Server",
+    /** The common configuration scope's surfaces, below the server's: data-root-wide, shared by every Project. */
+    groupGlobal: "Global config",
     /** Personal pages of the settings dialog. */
     generalTitle: "General",
     appearanceTitle: "Appearance",
@@ -141,6 +162,12 @@ export const en: Strings = {
     proxyAddress: "Proxy address",
     proxyAddressPlaceholder: "Empty = follow system proxy",
     /** Admin-only sub-page (server-global). */
+    /** The three common-scope pages' "?" lines: what each surface holds, and who it reaches. */
+    commonAgentsInfo: "Agent templates in the common scope: creating an Agent can copy one",
+    commonPluginsInfo: "The library, and the set a new Agent is given when nothing is picked",
+    commonModelsInfo:
+      "The common model table, credentials included: copied when a Project is created",
+
     uploadLimitsTitle: "Upload limits",
     /** Its two number fields, both in whole MB. */
     attachmentMaxMb: "Max attachment size (MB)",
@@ -424,6 +451,7 @@ export const en: Strings = {
     displayNameHint: "Leave empty to use the Project id as the name",
     settings: "Project settings",
     settingsTitle: "Project settings",
+    roleMember: "Member",
     members: "Members",
     addMember: "Add member",
     removeMember: "Remove",
@@ -494,7 +522,20 @@ export const en: Strings = {
     createPluginsPicked: (n: number): string => `${n} plugin${n === 1 ? "" : "s"} selected`,
     createPluginsHint:
       "Installed into the agent at creation (skills and hook packages); add or remove them later in its Skills and Hooks tabs.",
+    /** Shown while the common default set is pre-selected and untouched: where the picks came from, and that clearing them is a real choice. */
+    createPluginsDefaultHint:
+      "Pre-selected from the common config's default plugins; clearing them means this agent gets none",
     createPluginsEmpty: "The plugin library has nothing to install.",
+    /** Create dialog's optional common-scope template: the new Agent starts as a copy of it. */
+    createTemplate: "Start from a template",
+    createTemplatePick: "Choose a template",
+    /** The picker's first row: no template, a blank Agent (the pre-existing behavior). */
+    createTemplateEmpty: "Start empty (no template)",
+    createTemplateHint:
+      "The template copies its config, prompt, Skills and hooks; the name and description above win, and the two agents stay independent afterwards.",
+    /** Replaces the seed fields while a template is selected (the template's own Skills and hooks are the copy's). */
+    createTemplateSkillsOff:
+      "A template is selected: it carries its own Skills and hooks, so plugin and directory seeding are unavailable.",
     /** The directory-skills picker's trigger (the field's own label is createDirSkills). */
     createSkillsPlaceholder: "No skills selected",
     createSkillsPicked: (n: number): string => `${n} skill${n === 1 ? "" : "s"} selected`,
@@ -782,6 +823,14 @@ export const en: Strings = {
     syncDone: (added: number, updated: number) =>
       `Presets synced: ${added} added, ${updated} updated`,
     syncUpToDate: "Presets are already up to date",
+    /** Owner-only header action (Project scope): copy the common scope's Model table into this Project. */
+    importCommon: "Import from common",
+    importCommonHint:
+      "Copy the common config's models into this Project: only the ones it lacks are added, and a model it already has (same provider + model id) keeps its own configuration and key",
+    importCommonDone: (n: number): string =>
+      `Imported ${n} model${n === 1 ? "" : "s"} from the common config`,
+    importCommonNone: "This Project already has every model the common config lists",
+    importCommonEmpty: "The common config has no models yet — add some there first",
     homepage: "Model page",
     speedTest: "Speed test",
     speedTestTitle: "Speed test",
@@ -1190,6 +1239,16 @@ export const en: Strings = {
     uninstallConfirmTitle: (name: string): string => `Uninstall ${name}`,
     uninstallConfirmBody: (plugin: string, agent: string): string =>
       `Uninstall ${plugin} from ${agent}? Its installed skill and hook files (local edits included) will be deleted.`,
+
+    /** Common scope: the default plugin set a newly created Agent is seeded with. */
+    defaultsTitle: "Default plugins for new agents",
+    defaultsDesc:
+      "An agent created without a plugin choice is seeded with this list (each plugin brings its skills and hook package). Picking or clearing plugins at creation overrides it — clearing means that agent gets none. An empty list means no defaults.",
+    defaultsPlaceholder: "No default plugins",
+    /** Attention strip listing names the library no longer carries; the rest of the editor keeps working. */
+    defaultsUnknown: (names: readonly string[]): string =>
+      `No longer in the plugin library: ${names.join(", ")}. Saving removes these names.`,
+    defaultsSaved: "Default plugins saved",
   },
 
   /** Agent settings "Hooks" tab (features/agents/hooks-tab.tsx): the hook packages installed on one agent. */
@@ -2463,6 +2522,14 @@ Scenarios:
       member_not_found: "This user is not a member of the Project.",
       already_member: "This user is already a member of the Project.",
       already_owner: "This user is already an owner of the Project.",
+      // The data root keeps the id `common` for the common configuration scope: naming a new
+      // Project that is refused, and an older data root that already has one blocks the scope
+      // entirely. The remedy is a data-root operation (a Project's id is immutable through every
+      // UI), which is what these two sentences have to say.
+      reserved_project_id:
+        "This id is reserved by the data root: “common” is the common configuration scope and cannot name a Project.",
+      common_scope_conflict:
+        "A Project holds the id “common”, so the common configuration scope is unavailable. Delete that Project, or change its id and its <root>/common directory together, to enable the scope.",
       memory_import_confirm_required:
         "This import would overwrite or delete memories. Confirm it to continue.",
       schedule_exists: "A scheduled task with this name already exists.",
