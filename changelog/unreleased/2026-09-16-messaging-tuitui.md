@@ -39,6 +39,9 @@ the same editor the other four channels use.
   uploaded attachments.
 - Inbound, text, images and files arrive as ordinary input; voice and video are not downloaded as
   media and reach the conversation as a line of text carrying their URL.
+- A message that arrives while the Session is still working is answered with one queued heads-up in
+  the chat — once per busy stretch, on every channel — instead of leaving the sender with silence
+  until the answer.
 - The credential test is the event socket's handshake, which sends nothing and names no account.
   `POST …/messaging/tuitui/test-message` reuses the shared test text and answers 409
   `tuitui_no_chat` until the robot has been messaged once.

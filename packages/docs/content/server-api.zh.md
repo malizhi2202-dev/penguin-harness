@@ -331,7 +331,7 @@ Workspace 文件可能由 Agent 生成，`GET /files/content` 一律按不可信
 
 ### 消息绑定（飞书、Telegram、QQ、微信、推推）
 
-Session 可以接入消息软件机器人——目前的渠道是飞书、Telegram、QQ、微信与推推，各自挂在 `/messaging/<channel>` 之下。一个 Session **每个渠道至多保存一份配置**（多份可同时保存），其中**至多一个渠道处于启用状态**——启用的渠道持有在线连接。启用即把机器人账号绑定到该 Session，停用即解除绑定，因此同一个应用或机器人可以同时保存在任意多个 Session 上，只有启用是互斥的。发给机器人的消息以普通用户输入在该 Session 上发起 Task——与在网页输入框里输入完全一致（无标记块；忙碌时排入 follow-up 队列）——完成的回复再转发回对应会话，并按渠道文本上限分段（Telegram 硬上限 4096 字符）。飞书经 SDK 的 WebSocket 长连接接收事件，Telegram 用 `getUpdates` 长轮询，QQ 以 `GROUP_AND_C2C_EVENT` intent 保持平台的 WebSocket 网关连接，微信用 `ilink/bot/getupdates` 长轮询，推推则以一条 WebSocket 长连接承载全部事件——五者都无需公网回调地址。保存与连接是两件事：PUT 只保存凭据，连接由独立的 state 接口开关。路径同上表，省略 `/api/sessions/:sessionId` 前缀。
+Session 可以接入消息软件机器人——目前的渠道是飞书、Telegram、QQ、微信与推推，各自挂在 `/messaging/<channel>` 之下。一个 Session **每个渠道至多保存一份配置**（多份可同时保存），其中**至多一个渠道处于启用状态**——启用的渠道持有在线连接。启用即把机器人账号绑定到该 Session，停用即解除绑定，因此同一个应用或机器人可以同时保存在任意多个 Session 上，只有启用是互斥的。发给机器人的消息以普通用户输入在该 Session 上发起 Task——与在网页输入框里输入完全一致（无标记块；忙碌时排入 follow-up 队列，并在会话里回一句「已排队」，每段忙碌只回一次）——完成的回复再转发回对应会话，并按渠道文本上限分段（Telegram 硬上限 4096 字符）。飞书经 SDK 的 WebSocket 长连接接收事件，Telegram 用 `getUpdates` 长轮询，QQ 以 `GROUP_AND_C2C_EVENT` intent 保持平台的 WebSocket 网关连接，微信用 `ilink/bot/getupdates` 长轮询，推推则以一条 WebSocket 长连接承载全部事件——五者都无需公网回调地址。保存与连接是两件事：PUT 只保存凭据，连接由独立的 state 接口开关。路径同上表，省略 `/api/sessions/:sessionId` 前缀。
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |

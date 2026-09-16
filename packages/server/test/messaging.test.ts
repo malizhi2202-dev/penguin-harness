@@ -46,6 +46,7 @@ import { INLINE_IMAGE_MAX_BYTES, toAttachmentLimits } from "../src/services/atta
 import {
   MESSAGING_APPROVAL_NOTICE,
   MESSAGING_MAX_LINE_MESSAGES,
+  MESSAGING_QUEUED_NOTICE,
   MESSAGING_OUTBOUND_FILE_MAX_COUNT,
   MESSAGING_OUTBOUND_IMAGE_MAX_BYTES,
   MESSAGING_TEST_MESSAGE,
@@ -3218,6 +3219,163 @@ describe("a redelivered inbound message", () => {
     await fire("om_fresh", "again");
     await waitFor(() => runs.length === 2);
     expect(t.deps.messaging.statusOf(SID, "feishu").lastInboundAt).toBe("2026-08-26T09:01:00.000Z");
+  });
+});
+
+/**
+ * The heads-up a chat gets when its message lands on a Session that is still working.
+ *
+ * The Web App has always shown the queued row; the chat had nothing, so the person holding
+ * the phone sent the message again. This suite pins the one notice that closes that gap: it
+ * arrives once per busy stretch, it never arrives on the ordinary idle path, and it never
+ * changes what the queue itself does. Driven through a scripted connector, because the
+ * subject is the bridge's behavior and not any channel's wire.
+ */
+describe("a message that arrives while the Session is busy", () => {
+  let t: TestApp;
+  let bridge: MessagingBridge;
+  let runs: OmniMessage[][];
+  let notices: string[];
+  let fired: ((msg: MessagingInboundMessage) => Promise<void>) | null;
+  /** Set by a test that needs the Session BUSY: its run parks until `release` is called. */
+  let park: boolean;
+  let release: (() => void) | null;
+
+  const connector: MessagingChannelConnector = {
+    channel: "feishu",
+    createClient: () =>
+      Promise.resolve({
+        checkCredentials: () => Promise.resolve(null),
+        sendText: (_chatId: string, text: string) => {
+          notices.push(text);
+          return Promise.resolve();
+        },
+        replyText: (_messageId: string, text: string) => {
+          notices.push(text);
+          return Promise.resolve();
+        },
+        sendImage: () => Promise.resolve(),
+        sendFile: () => Promise.resolve(),
+      }),
+    connect: (_config, handlers) => {
+      fired = async (msg) => {
+        await handlers.onMessage(msg);
+      };
+      handlers.onReady?.();
+      return Promise.resolve({ close: () => {} });
+    },
+  };
+
+  const fire = (messageId: string, text: string) =>
+    fired!({ chatId: "oc_busy", chatKind: "direct", messageId, text });
+
+  const parkedEchoSession = (): RuntimeSession => ({
+    sessionId: SID,
+    toolPermission: () => "rw",
+    generateTitle: async () => ({ title: null, usage: null }),
+    compactability: () => "ok" as const,
+    steer: () => false,
+    skipReconnectWait: () => false,
+    async *run(input: OmniMessage[]) {
+      runs.push(input);
+      if (park) await new Promise<void>((resolve) => (release = resolve));
+      yield assistantText("Reply text");
+    },
+    async *compact() {},
+  });
+
+  beforeEach(async () => {
+    notices = [];
+    runs = [];
+    park = false;
+    release = null;
+    fired = null;
+    t = await createTestApp({ feishuSdk: new FakeSdk() });
+    const { cookie } = await provisionUser(t.app, "birder");
+    const api = apiClient(t.app, cookie);
+    const row = sessionRowOf(SID, "birder-default_project");
+    t.deps.sessionsRepo.insert(row);
+    t.deps.manager.adopt(row, parkedEchoSession());
+    expect((await api.put(BASE(SID), PUT_BODY)).status).toBe(200);
+    expect((await api.post(`${BASE(SID)}/state`, { enabled: true })).status).toBe(200);
+    t.deps.messaging.stop();
+    bridge = new MessagingBridge({
+      repo: t.deps.messagingRepo,
+      sessions: t.deps.sessionsRepo,
+      files: t.deps.workspaceFiles,
+      root: t.root,
+      attachmentLimits: () => toAttachmentLimits(t.deps.serverSettingsRepo.getAttachmentLimitsMb()),
+      channels: t.deps.channels,
+      runner: t.deps.manager,
+      connectors: [connector],
+      errors: t.deps.errors,
+    });
+    await bridge.start();
+  });
+
+  afterEach(async () => {
+    release?.();
+    bridge.stop();
+    await t.cleanup();
+  });
+
+  /** Only the heads-ups: a finished run's reply text lands in the same list. */
+  const queueNotices = () => notices.filter((notice) => notice === MESSAGING_QUEUED_NOTICE);
+
+  it("says so once, however many messages pile up behind the running task", async () => {
+    park = true;
+    await fire("om_busy_1", "start something long");
+    await waitFor(() => runs.length === 1);
+    // The message that STARTED the run is not queued, so it gets no heads-up.
+    expect(queueNotices()).toEqual([]);
+
+    await fire("om_busy_2", "and one more thing");
+    await waitFor(() => queueNotices().length === 1);
+    await fire("om_busy_3", "and another");
+    await waitFor(() => t.deps.manager.pendingFollowUpCount(SID) === 2);
+    // One notice for the stretch, not one per message: three messages are answered once the
+    // task ends, and three "you are queued" lines would be noise about the same wait.
+    expect(queueNotices()).toEqual([MESSAGING_QUEUED_NOTICE]);
+
+    release!();
+    await waitFor(() => runs.length === 2);
+  });
+
+  it("tells the next busy stretch again, once the queue has drained", async () => {
+    park = true;
+    await fire("om_busy_4", "first");
+    await waitFor(() => runs.length === 1);
+    await fire("om_busy_5", "queued behind it");
+    await waitFor(() => queueNotices().length === 1);
+
+    // Let the queued follow-up run to completion, so what comes next is a different wait
+    // rather than more of this one.
+    park = false;
+    release!();
+    await waitFor(() => runs.length === 2);
+    await waitFor(() => t.deps.manager.statusOf(SID) === "idle");
+    // The flag clears when the bridge OBSERVES the new run's start, which arrives through the
+    // Session stream rather than synchronously — so the test waits for that observation
+    // instead of sleeping and hoping. Reading the entry directly is the only way to see it:
+    // every observable the bridge exposes reports traffic, not this.
+    const clearedTheHeadsUp = () =>
+      (bridge as unknown as { entries: Map<string, { queueNoticeSent: boolean }> }).entries.get(SID)
+        ?.queueNoticeSent === false;
+    await waitFor(clearedTheHeadsUp);
+
+    park = true;
+    await fire("om_busy_6", "a second long task");
+    await waitFor(() => runs.length === 3);
+    await fire("om_busy_7", "queued behind that one");
+    await waitFor(() => queueNotices().length === 2);
+  });
+
+  it("stays silent on the ordinary path, where nothing is waiting", async () => {
+    await fire("om_idle", "just one question");
+    await waitFor(() => runs.length === 1);
+    await waitFor(() => notices.length === 1);
+    // The only message in the chat is the answer: an idle Session never sees the notice.
+    expect(notices).toEqual(["Reply text"]);
   });
 });
 

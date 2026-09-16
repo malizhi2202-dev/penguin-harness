@@ -262,6 +262,18 @@ export function messagingInboundFileFailedNotice(fileName: string, reason: strin
   return `"${fileName}" could not be downloaded from the chat, so nothing was sent to the Agent. 无法从会话中下载文件“${fileName}”，未发送给智能体。(${noticeReason(reason)})`;
 }
 
+/**
+ * The one heads-up a chat gets when its message lands on a Session that is still working: the
+ * message is queued, not lost, and it will be answered when the current task finishes.
+ *
+ * Until now the chat heard nothing at all between sending and the answer — the Web App shows
+ * the queued row, but the person holding the phone sees silence and is likely to send the
+ * message again. Deliberately NOT the reference bridge's wording ("send /new to interrupt"):
+ * this product has no chat command that interrupts a run, and the honest sentence is the one
+ * that promises only what happens. Sent at most once per busy stretch (see onInbound).
+ */
+export const MESSAGING_QUEUED_NOTICE =
+  "The previous message is still being worked on, so this one is queued behind it. 上一条消息还在处理中，这条已排在其后。";
 export const MESSAGING_APPROVAL_NOTICE =
   "A tool call is waiting for your approval in the PenguinHarness web UI. 有工具调用正在等待你在网页端审批。";
 export const MESSAGING_TEST_MESSAGE =
@@ -697,6 +709,8 @@ interface BridgeEntry {
   inCompaction: boolean;
   /** The run in progress already threaded its first outbound message onto the inbound one. */
   threadedThisRun: boolean;
+  /** Whether the current busy stretch has already told the chat that its message is queued. */
+  queueNoticeSent: boolean;
   /**
    * When the run in progress started, as the bridge saw it (0 before it has seen one). The
    * cut-off for "a file this run produced" — see deliverFiles.
@@ -932,6 +946,7 @@ export class MessagingBridge {
       armed: runState === "idle",
       inCompaction: false,
       threadedThisRun: false,
+      queueNoticeSent: false,
       runStartedAt: 0,
       runTarget: null,
       replyText: [],
@@ -1169,9 +1184,13 @@ export class MessagingBridge {
           // An ordinary user input, exactly as if typed into the web composer: no marker
           // block, no special sender — the model deliberately does not learn the message
           // arrived through a messaging channel.
-          await this.deps.runner.startTask(entry.sessionId, [userText(text)], {
+          const started = await this.deps.runner.startTask(entry.sessionId, [userText(text)], {
             queueIfBusy: true,
           });
+          if (started.queued && !entry.queueNoticeSent) {
+            entry.queueNoticeSent = true;
+            await this.replyInbound(entry, msg, MESSAGING_QUEUED_NOTICE);
+          }
         }
       } else {
         const notice = await this.startAttachedTask(entry, text, images, files);
@@ -1546,6 +1565,9 @@ export class MessagingBridge {
       // steering changes, and re-arming there would thread every message of the run.
       if (entry.active !== "running") {
         entry.threadedThisRun = false;
+        // One heads-up per busy stretch, not one per message: a reader who sends three
+        // messages while the first is still running is owed a single "it is queued".
+        entry.queueNoticeSent = false;
         // The cut-off the run's own output is judged against. Taken on the same edge, so a
         // task_state republished mid-run cannot move it forward past files already written.
         entry.runStartedAt = this.now();
