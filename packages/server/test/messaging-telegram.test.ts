@@ -1153,26 +1153,34 @@ describe("telegram binding routes and connector loop", () => {
     expect(t.deps.messagingRepo.find(SID2, "telegram")?.lastChatId).toBe(`${FORUM_CHAT}:${TOPIC}`);
   });
 
-  it("moves to the newest topic the user writes in, like the chat it already remembers", async () => {
+  it("serves the topic that spoke first, and ignores a second one outright", async () => {
     await bindEnabled(SID);
     fake.push(forumText("in the first topic", 201, TOPIC));
     await waitFor(() => runs.length === 1);
     await waitFor(() => fake.allSends().length === 1);
     expect(fake.allTexts()[0]!.threadId).toBe(TOPIC);
 
+    // Another topic is another conversation, and this binding answers one of them: the
+    // first that ever spoke to it. Ignored in silence — no run, no reply, and the
+    // remembered chat does not move.
     fake.push(forumText("now over here", 202, 77));
+    // A message in the REMEMBERED topic is the barrier: updates are polled in order, so
+    // once this one has been answered, the ignored one has been seen too.
+    fake.push(forumText("and back here", 203, TOPIC));
     await waitFor(() => runs.length === 2);
     await waitFor(() => fake.allSends().length === 2);
-    expect(fake.allTexts()[1]!.threadId).toBe(77);
-    expect(t.deps.messagingRepo.find(SID, "telegram")?.lastChatId).toBe(`${FORUM_CHAT}:77`);
+
+    // One reply per accepted message, both of them in the topic this binding serves — and
+    // never a third send into the topic it ignored.
+    expect(fake.allTexts().map((x) => x.threadId)).toEqual([TOPIC, TOPIC]);
+    expect(t.deps.messagingRepo.find(SID, "telegram")?.lastChatId).toBe(`${FORUM_CHAT}:${TOPIC}`);
   });
 
   it("a held reply answers into the topic its run was ASKED in, not the one the chat moved to", async () => {
-    // `finalReplyOnly` delivers at the run's END, which is long after the chat can move: a
-    // second person writing in another topic meanwhile takes over both `last_chat_id` and the
-    // reply anchor. Addressed at delivery time, the WHOLE answer to the first question would
-    // land in their topic, quoted onto their message — the every-message relay can misplace
-    // the tail of a reply that way, never the entire thing.
+    // `finalReplyOnly` delivers at the run's END, which is long after the chat could move. A
+    // second person writing in another topic meanwhile is now ignored outright — but the
+    // question this test asks predates that lock and outlives it: the answer must go back to
+    // where it was ASKED, quoting the message that asked, whatever else reaches the channel.
     const row = sessionRowOf(SID2, projectId);
     t.deps.sessionsRepo.insert(row);
     let release!: () => void;
@@ -1196,7 +1204,8 @@ describe("telegram binding routes and connector loop", () => {
     off();
 
     // Bob, in another topic, while the run is parked on its last message. A sticker rather
-    // than text so nothing queues behind the run: what matters is only that the chat moved.
+    // than text so nothing queues behind the run: all this needs is a channel that carries
+    // traffic from a conversation the binding does not serve.
     fake.push({
       message_id: 202,
       chat: { id: FORUM_CHAT, type: "supergroup", is_forum: true },
@@ -1204,20 +1213,14 @@ describe("telegram binding routes and connector loop", () => {
       is_topic_message: true,
       from: { first_name: "Bob" },
     });
-    await waitFor(() => fake.allSends().length === 1);
-    expect(t.deps.messagingRepo.find(SID2, "telegram")?.lastChatId).toBe(`${FORUM_CHAT}:77`);
 
     release();
-    await waitFor(() => fake.allSends().length === 2);
+    await waitFor(() => fake.allSends().length === 1);
     const sends = fake.allTexts();
-    // Bob's message got its notice where Bob wrote it — the live target is right for that.
-    expect(sends[0]).toMatchObject({
-      text: MESSAGING_UNSUPPORTED_NOTICE,
-      threadId: 77,
-      replyTo: 202,
-    });
-    // ...and the answer went back to the topic that asked, quoting the message that asked it.
-    expect(sends[1]).toMatchObject({ text: "the answer", threadId: TOPIC, replyTo: 201 });
+    // Nothing was sent on account of Bob: the held answer is the chain's first delivery, and
+    // it went back to the topic that asked, quoting the message that asked it.
+    expect(sends[0]).toMatchObject({ text: "the answer", threadId: TOPIC, replyTo: 201 });
+    expect(t.deps.messagingRepo.find(SID2, "telegram")?.lastChatId).toBe(`${FORUM_CHAT}:${TOPIC}`);
   });
 
   it("sends the approval notice and the test message into the remembered topic", async () => {

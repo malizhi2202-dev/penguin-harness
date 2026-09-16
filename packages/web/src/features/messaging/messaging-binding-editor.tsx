@@ -1216,6 +1216,11 @@ export function MessagingBindingHelp({ channel }: { channel: MessagingChannel })
         {channel === "tuitui" && <p className="mt-1.5">{S.tuitui.noQuote}</p>}
         {channel === "tuitui" && <p className="mt-1.5">{S.tuitui.imageAsFile}</p>}
         <p className="mt-1.5">{S.messaging.faqWhatBinding}</p>
+        {/* Which conversation this binding answers, which is one and only one — the rule that
+            explains the silence a reader meets after trying the bot in a second group. */}
+        <p className="mt-1.5">{S.messaging.faqOneChat}</p>
+        {/* Telegram's version of it, where a forum's other topics are the natural next try. */}
+        {channel === "telegram" && <p className="mt-1.5">{S.telegram.topicIsConversation}</p>}
       </HelpFold>
       <HelpFold title={S.messaging.faqTroubleTitle}>
         <ul className="list-disc space-y-1 pl-4">

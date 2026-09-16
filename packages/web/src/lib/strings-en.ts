@@ -2055,6 +2055,13 @@ Scenarios:
      * of borrowing the shared "open developer console" label.
      */
     openBotFather: "Open @BotFather",
+    /**
+     * A forum topic is a conversation of its own, so the first-chat rule locks the binding
+     * onto one topic. Stated here because a forum's other topics are exactly where a reader
+     * expects the bot to keep answering.
+     */
+    topicIsConversation:
+      "Each forum topic is a conversation of its own, so this binding serves only the first topic that wrote to it.",
     invalidToken: "The Bot Token looks like <digits>:<secret>, as issued by @BotFather",
     /** Why "send test message" is disabled before the bot has ever been messaged. */
     testMessageNoChat: "Message the bot once in Telegram first, so it knows which chat to send to",
@@ -2356,6 +2363,12 @@ Scenarios:
     /** The channel-neutral half of that fold: how the same bot moves between conversations. */
     faqWhatBinding:
       "The same bot can stay saved in several conversations, but only one of them may have its connection enabled at a time. To move it, turn the connection off where it is on and enable it here — no credential has to be deleted.",
+    /**
+     * Which conversation the binding answers, which is one and only one: the first that
+     * wrote to it. The question a reader arrives with after a second group goes unanswered.
+     */
+    faqOneChat:
+      "A binding serves only the first conversation that ever wrote to it: messages from any other conversation are ignored, and the bot does not answer them. To serve a different one, delete this channel's configuration here and add it again.",
     faqTroubleTitle: "Troubleshooting",
     /** Troubleshooting entries (bot must be messaged once; connection errors point at credentials; one poller per Telegram token; Telegram Group Privacy withholds group messages from a non-admin bot; QQ answers only a message just sent). */
     troubleNoChat:

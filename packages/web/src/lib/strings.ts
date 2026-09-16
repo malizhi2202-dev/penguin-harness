@@ -2029,6 +2029,12 @@ Benchmark：
     invalidToken: "Bot Token 形如「数字:密钥」，由 @BotFather 签发",
     /** Why "send test message" is disabled before the bot has ever been messaged. */
     testMessageNoChat: "先在 Telegram 中给机器人发一条消息，机器人才知道要发到哪个会话",
+    /**
+     * A forum topic is a conversation of its own, so the first-chat rule locks the binding
+     * onto one topic. Stated here because a forum's other topics are exactly where a reader
+     * expects the bot to keep answering.
+     */
+    topicIsConversation: "论坛话题各自算一个会话，因此这份绑定只会服务第一个对它说话的那个话题。",
     /** The setup FAQ fold's steps. */
     setupSteps: [
       "在 Telegram 中打开 @BotFather，发送 /newbot 创建机器人",
@@ -2310,6 +2316,13 @@ Benchmark：
     /** The channel-neutral half of that fold: how the same bot moves between conversations. */
     faqWhatBinding:
       "同一个机器人可以同时保存在多个对话里，但同一时刻只能有一个对话启用它的连接。要换一个对话使用，先在原对话停用连接，再在这里启用——凭证不必删除。",
+    /**
+     * Which conversation the binding answers, which is one and only one: the first that
+     * wrote to it. The question a reader arrives with after a second group goes unanswered.
+     */
+    faqOneChat:
+      "一份绑定只服务第一个对它说话的会话：此后来自其他会话的消息会被忽略，机器人也不会回复。想换一个会话，就在这里先删除该渠道的配置，再重新添加。",
+    /** Why "send test message" is disabled before a chat is remembered. */
     faqTroubleTitle: "常见问题",
     /** Troubleshooting entries (bot must be messaged once; connection errors point at credentials; one poller per Telegram token; Telegram Group Privacy withholds group messages from a non-admin bot; QQ answers only a message just sent). */
     troubleNoChat: "「发送测试消息」不可用？机器人要先收到过一条消息，才知道要发到哪个会话。",

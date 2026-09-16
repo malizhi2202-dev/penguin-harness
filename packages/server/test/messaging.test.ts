@@ -1169,9 +1169,10 @@ describe("messaging binding routes and bridge", () => {
     // chat A — the one window in which the two halves of the reply target can move apart.
     await waitFor(() => fake.gated === 1);
 
-    // A second message lands in another chat mid-delivery. Between messages this is the
-    // documented "answer wherever the user last wrote"; inside one delivery it would split a
-    // single reply across two places (on Telegram, two forum topics).
+    // A second message lands in another chat mid-delivery. It is refused outright — a
+    // binding serves one conversation (see the chat-lock cases below) — so the row cannot
+    // move under a reply that is already going out. Were it accepted, this is the one window
+    // in which a single reply would split across two places (on Telegram, two forum topics).
     await fake.lastConnection().fire({
       chatId: "oc_group_b",
       chatType: "group",
@@ -1186,6 +1187,57 @@ describe("messaging binding routes and bridge", () => {
       { kind: "reply", target: "om_a", text: "a".repeat(3000) },
       { kind: "send", target: "oc_group_a", text: "b".repeat(3000) },
     ]);
+  });
+
+  // —— one conversation per binding: the chat lock ——————————————————————————
+
+  /** One inbound text, from a chat named here. `fire` awaits the bridge, so it is settled. */
+  const textFrom = (chatId: string, messageId: string, text: string) =>
+    fake.lastConnection().fire({
+      chatId,
+      chatType: chatId.startsWith("oc_group") ? "group" : "p2p",
+      messageId,
+      messageType: "text",
+      content: JSON.stringify({ text }),
+    });
+
+  it("serves the conversation that spoke first, and ignores a later one", async () => {
+    await bindEnabled(SID);
+    await textFrom("oc_first", "om_first", "hello");
+    await waitFor(() => runs.length === 1);
+    expect(t.deps.messagingRepo.find(SID, "feishu")?.lastChatId).toBe("oc_first");
+
+    // Another conversation writes to the same bot. It gets nothing at all: no run, no reply
+    // — not even a refusal, since a chat that was never invited should not learn from the
+    // answer that the robot exists — and the remembered conversation does not move.
+    await textFrom("oc_other", "om_other", "and over here");
+    expect(runs).toHaveLength(1);
+    expect(fake.allSends()).toEqual([{ kind: "send", target: "oc_first", text: "Reply text" }]);
+    expect(t.deps.messagingRepo.find(SID, "feishu")?.lastChatId).toBe("oc_first");
+
+    // ...and the conversation it does serve is still answered, which is what makes the
+    // silence above a rule rather than a broken bridge.
+    await textFrom("oc_first", "om_again", "still here?");
+    await waitFor(() => runs.length === 2);
+    expect(fake.allSends()).toHaveLength(2);
+  });
+
+  it("takes a new conversation after the binding is deleted and added again", async () => {
+    await bindEnabled(SID);
+    await textFrom("oc_first", "om_first", "hello");
+    await waitFor(() => runs.length === 1);
+
+    // The one deliberate way to move a binding: delete the channel's config and add it back.
+    expect((await api.delete(BASE(SID))).status).toBe(204);
+    await bindEnabled(SID);
+    await textFrom("oc_second", "om_second", "now over here");
+    await waitFor(() => runs.length === 2);
+    expect(t.deps.messagingRepo.find(SID, "feishu")?.lastChatId).toBe("oc_second");
+
+    // The abandoned conversation is the ignored one now.
+    await textFrom("oc_first", "om_stale", "anyone?");
+    expect(runs).toHaveLength(2);
+    expect(fake.allSends().some((x) => x.target === "om_stale")).toBe(false);
   });
 
   // —— linePerMessage: the per-binding delivery option ————————————————————————

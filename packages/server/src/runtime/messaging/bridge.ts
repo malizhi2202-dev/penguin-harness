@@ -1119,6 +1119,34 @@ export class MessagingBridge {
     return true;
   }
 
+  /**
+   * Is this message from the conversation this binding serves?
+   *
+   * One binding answers ONE conversation, and the conversation it answers is the first one
+   * that ever spoke to it. Everything else is ignored in silence: a robot that answers
+   * whichever chat wrote last has no identity of its own — two groups mentioning it at once
+   * share one Session's context and each reply lands in whichever group spoke most recently
+   * — and a chat that was never invited must not learn from a refusal that the robot exists.
+   *
+   * The lock is the binding row's own `lastChatId`, so it needs no new column and it
+   * survives restarts. Moving a binding to another conversation is a deliberate act: delete
+   * the binding and add it again from the Web App (see the docs) — which is also what makes
+   * the first-chat rule safe to state, since no message can ever move it.
+   *
+   * Checked BEFORE the arrival stamp (that stamp means "this binding accepted a message") and
+   * before the outbound client is touched, so an ignored chat costs a row read and nothing
+   * else.
+   */
+  private servesChat(entry: BridgeEntry, msg: MessagingInboundMessage): boolean {
+    const row = this.deps.repo.find(entry.sessionId, entry.channel);
+    if (row === null) return false;
+    if (row.lastChatId === null || row.lastChatId === msg.chatId) return true;
+    this.log(
+      `[messaging] ${entry.channel} ignored a message from a chat this binding does not serve`,
+    );
+    return false;
+  }
+
   /** Get-or-create one binding's processed-id memory (see recentInbound). */
   private inboundMemoryOf(sessionId: string, channel: string): RecentInboundIds {
     const key = inboundKey(sessionId, channel);
@@ -1133,6 +1161,8 @@ export class MessagingBridge {
   private async onInbound(entry: BridgeEntry, msg: MessagingInboundMessage): Promise<void> {
     if (this.entries.get(entry.sessionId) !== entry) return; // stale connection
     if (this.isRedelivery(entry, msg)) return;
+    // A message from another conversation is not this binding's business (see servesChat).
+    if (!this.servesChat(entry, msg)) return;
     // Stamped on acceptance, before anything can go wrong with it: the panel's question is
     // "did the channel deliver anything", which a later failure does not un-answer.
     entry.lastInboundAt = this.nowIso();
@@ -1141,7 +1171,8 @@ export class MessagingBridge {
       // The chat becomes the reply target BEFORE any processing: even a rejected message
       // type teaches the bridge where the user is, and the run started below can emit its
       // first assistant message before this returns — the outbound relay reads the chat
-      // off the row.
+      // off the row. For a binding that had no chat yet this is also the moment the lock
+      // above starts applying, so the very first message chooses the conversation.
       this.deps.repo.recordChat(entry.sessionId, entry.channel, msg.chatId, isDirect);
       entry.lastInboundMessageId = isDirect ? null : msg.messageId;
       // A caption is this message's text; an attachment sent with none carries no text at all.
