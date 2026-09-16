@@ -28,9 +28,6 @@ the same editor the other four channels use.
   delay.
 - A group message or a teams post reaches the Agent only when it carries the platform's own `at_me`
   flag; a direct chat is never gated.
-- An accepted message is marked received with 推推's own「收到」emoji, once per message and before the
-  run starts. A refused receipt costs the gesture alone — it is never recorded as a failed delivery —
-  and a channel with no such gesture (the other four) is not asked for one.
 - Outbound, the platform has no reply-to field, so a reply is a message in the same conversation,
   and a text already sent cannot be edited. An image goes out as the same `msgtype: "file"` an
   attachment does, because the platform has no image message type of its own — a known capability

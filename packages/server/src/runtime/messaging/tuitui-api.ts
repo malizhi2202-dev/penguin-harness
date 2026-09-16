@@ -505,15 +505,8 @@ export interface TuituiSocket {
 
 /** One live outbound client for a credential set. */
 export interface TuituiBotClient extends MessagingClient {
-  /**
-   * Puts an emoji reaction on an inbound message — the platform's only receipt gesture, and
-   * the vocabulary is this platform's (`emoji` is a word the platform must know).
-   *
-   * Named for the platform rather than the seam's `react`, because the two say different
-   * things: this one names the emoji, the seam's asks only that a message be marked received.
-   * The connector owns the mapping (tuitui-connector.ts).
-   */
-  sendReaction(chatId: string, messageId: string, emoji: string): Promise<void>;
+  /** Puts an emoji reaction on an inbound message — the platform's only receipt gesture. */
+  react(chatId: string, messageId: string, emoji: string): Promise<void>;
   /**
    * Downloads one inbound image, under the cap the seam's `fetch(maxBytes)` carried in.
    *
@@ -743,7 +736,7 @@ export function createTuituiTransport(opts: TuituiTransportOpts = {}): TuituiTra
           return { data, mimeType: sniffImageMime(data) ?? "image/png" };
         },
         fetchFile: (url, maxBytes) => downloadCapped(url, maxBytes, "The file"),
-        async sendReaction(chatId, messageId, emoji): Promise<void> {
+        async react(chatId, messageId, emoji): Promise<void> {
           const native = messageId.slice(messageId.indexOf(REPLY_SEPARATOR) + 1);
           if (native === "" || emoji === "") return;
           const base = { msgtype: "emoji_reaction", emoji_reaction: { emoji, cancel: false } };

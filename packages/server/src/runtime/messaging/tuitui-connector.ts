@@ -40,13 +40,6 @@ import {
 
 export { TUITUI_DEFAULT_HOST };
 
-/**
- * The emoji 推推 puts on a message it has taken in — the platform's one receipt gesture, and
- * this channel's own word for it. It lives here, next to the channel that spells it, because
- * the seam that asks for the receipt deliberately carries no emoji (see MessagingClient.react).
- */
-export const TUITUI_RECEIPT_EMOJI = "收到";
-
 /** The Tuitui binding's stored config document (`messaging_bindings.config_json`). */
 export interface TuituiBindingConfig extends Record<string, unknown> {
   appId: string;
@@ -78,8 +71,6 @@ export function tuituiConfigOf(config: Record<string, unknown>): TuituiBindingCo
 
 export class TuituiConnector implements MessagingChannelConnector {
   readonly channel = "tuitui" as const;
-  /** The platform rates a message with an emoji; this is the one channel that can today. */
-  readonly receipt = true;
 
   constructor(private readonly transport: TuituiTransport) {}
 
@@ -89,14 +80,10 @@ export class TuituiConnector implements MessagingChannelConnector {
 
   async createClient(config: Record<string, unknown>): Promise<MessagingClient> {
     // The transport's client already satisfies the seam (checkCredentials, both text sends,
-    // both media sends). Only the receipt needs the channel's own vocabulary added: the seam
-    // asks for "this message arrived" and the platform takes an emoji, and which emoji that
-    // is, is 推推's business — not the shared bridge's.
-    const client = this.transport.createClient(this.credsOf(config));
-    return Object.assign(client, {
-      react: (chatId: string, messageId: string) =>
-        client.sendReaction(chatId, messageId, TUITUI_RECEIPT_EMOJI),
-    });
+    // both media sends). The react() it adds on top is this channel's own extra and has no
+    // caller yet: a receipt gesture belongs to the shared bridge, which is channel-neutral and
+    // knows nothing about emoji reactions.
+    return this.transport.createClient(this.credsOf(config));
   }
 
   async connect(
