@@ -31,14 +31,11 @@ import type {
   MessagingInboundImage,
 } from "./connector.js";
 import {
-  TUITUI_DEFAULT_HOST,
   tuituiMessageIdOf,
   type TuituiBotClient,
   type TuituiCredentials,
   type TuituiTransport,
 } from "./tuitui-api.js";
-
-export { TUITUI_DEFAULT_HOST };
 
 /** The Tuitui binding's stored config document (`messaging_bindings.config_json`). */
 export interface TuituiBindingConfig extends Record<string, unknown> {
@@ -50,12 +47,11 @@ export interface TuituiBindingConfig extends Record<string, unknown> {
 /**
  * Narrows a stored config document; throws a readable error on a malformed one.
  *
- * `host` defaults rather than being required, so a binding saved before the field existed
- * (or saved by hand without it) still connects to the one deployment the platform publishes.
+ * All three fields are required: this channel is reachable at whatever host its own
+ * deployment publishes, so the binding carries it and there is nothing to fall back to.
  */
 export function tuituiConfigOf(config: Record<string, unknown>): TuituiBindingConfig {
-  const { appId, appSecret } = config;
-  const host = config.host ?? TUITUI_DEFAULT_HOST;
+  const { appId, appSecret, host } = config;
   if (
     typeof appId !== "string" ||
     appId === "" ||

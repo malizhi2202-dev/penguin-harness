@@ -368,7 +368,7 @@ Session 可以接入消息软件机器人——目前的渠道是飞书、Telegr
 | POST | /messaging/wechat/scan/cancel | `{taskId}`——用户中途离开时丢弃该任务，立即忘记其句柄，而不是等待过期清扫 |
 | POST | /messaging/wechat/test-message | 向最近一次收到消息的会话发送一条固定测试文本；在微信里给机器人发过消息之前返回 409 `wechat_no_chat` |
 | GET | /messaging/tuitui | 同一形态下的推推配置（`appId`、`appSecretMasked`、`host`） |
-| PUT | /messaging/tuitui | 保存凭据对与主机：`{appId, appSecret?, host?, clearAppSecret?, linePerMessage?, finalReplyOnly?, renderMarkdown?}`——360 推推机器人后台的 App ID 与 App Secret；`appSecret` 省略或留空保持已存值，清除标记与飞书 PUT 同口径。`host` 是这里唯一非机密的字段，留空即默认 `im.example.com`；这里只接受裸主机名，带协议、路径或 `:端口` 的写法会被拒绝（端口固定是平台自己的 8282，不是可配置项），因为拼进 URL 时它们要么被静默丢弃、要么拼出第二个端口。App ID 即账号身份，把已启用绑定的 App ID 换成另一个 Session 已启用的账号时返回 409 `account_enabled_elsewhere`，其余情况保存不会跨 Session 冲突 |
+| PUT | /messaging/tuitui | 保存凭据对与主机：`{appId, appSecret?, host?, clearAppSecret?, linePerMessage?, finalReplyOnly?, renderMarkdown?}`——360 推推机器人后台的 App ID 与 App Secret；`appSecret` 省略或留空保持已存值，清除标记与飞书 PUT 同口径。`host` 是这里唯一非机密的字段，而且**必填**——接入地址由部署方决定，本产品没有可假定的默认值；只接受裸主机名，带协议、路径或 `:端口` 的写法会被拒绝（端口固定是平台自己的 8282，不是可配置项），因为拼进 URL 时它们要么被静默丢弃、要么拼出第二个端口。App ID 即账号身份，把已启用绑定的 App ID 换成另一个 Session 已启用的账号时返回 409 `account_enabled_elsewhere`，其余情况保存不会跨 Session 冲突 |
 | POST | /messaging/tuitui/state | 与其他开关同一契约（无已存密钥时返回 400 `tuitui_secret_required`） |
 | DELETE | /messaging/tuitui | 整体删除该渠道的配置（含 App Secret）。仅为 API 完整性保留 |
 | POST | /messaging/tuitui/test | 用请求携带的草稿值（`appId`、`appSecret`、`host`）做凭据探测，缺省字段回落到已存配置 → `{ok, latencyMs?, error?}`。探测就是那条事件 socket 的握手——这套凭据的全部用途正是它，且握手不发送任何内容。不报出账号名：这套 API 没有任何能识别机器人身份的接口 |
@@ -378,7 +378,7 @@ Session 可以接入消息软件机器人——目前的渠道是飞书、Telegr
 **QQ 是只能被动回复的渠道，这改变了「送达」的含义。** 平台不提供本产品可用的主动推送：每一条外发消息都是携带入站 `msg_id` 的*被动回复*，有效期只有几分钟，且单聊对同一条消息最多 4 条回复（群聊 5 条）。由此有三点在 API 上可见。一次运行完成的助手消息超过该额度时会被**合并**——前 `budget - 1` 条随完成即时发出，其余合并为最后一条送达，内容不丢。`linePerMessage` 的拆分上限**收敛到该额度**，而不是渠道无关的 20；被平台拒绝的 `renderMarkdown` 发送，其纯文本重试会再占用一次额度。`finalReplyOnly` 在这里有利有弊：它把一次运行的额度消耗压到最低——只发一条；但被动回复的有效期只有几分钟，把回复扣到运行结束才发，等于把这个窗口花在了运行本身上，运行时长超过窗口时将什么都送不出去，而逐条转发至少能把窗口之内完成的部分发出去。而没有可回复对象的发送——在网页端发起的对话，或窗口关闭之后的回复——会被**拒绝而非主动推送**：测试接口上表现为 502 `qq_send_failed`，转发回复则记为一条 `messaging_send_failed` 错误记录。QQ 的账号身份是 App ID。该渠道拒绝外发文件：平台的富媒体接口要求为文件提供公网可达地址。
 **微信只承载单聊，但媒体能力是五个渠道里最全的。** 该机器人渠道完全不接收群消息：在群里 @机器人的消息根本不会到达本 API，因此单聊正常、群聊沉默是渠道形态而非配置错误。作为交换，它是这里唯一能**双向**传输文字、图片与文件的渠道——回复中的图片与附件会上传到平台 CDN（每个文件一把 AES-128-ECB 密钥），以真正的图片和文件到达，而不是被拒绝。两类入站消息被折叠处理：语音消息按微信自带的语音转文字结果进入对话，视频按文件到达；微信没能转写的语音则以共用的「不支持」提示回到聊天。
 
-**推推把凭据放进每一个请求 URL，因此 URL 本身就是机密。** 平台没有 OAuth，也不签发 token：`appId` 与 `appSecret` 随每次调用同行——事件 socket 上是 `?auth=<appId>.<appSecret>`，每个 HTTP 请求上是 `?appid=…&secret=…`。没有换取、没有过期、也没有刷新，因此服务端构建的每条 URL 都是一份凭据，任何错误信息都不得引用它。`host` 是这套配置里唯一非机密的字段，留空即 `im.example.com`；这里只接受裸主机名，带协议、路径或 `:端口` 的写法会被拒绝（端口固定是平台自己的 8282，不是可配置项），因为拼进 URL 时它们要么被静默丢弃、要么拼出第二个端口。
+**推推把凭据放进每一个请求 URL，因此 URL 本身就是机密。** 平台没有 OAuth，也不签发 token：`appId` 与 `appSecret` 随每次调用同行——事件 socket 上是 `?auth=<appId>.<appSecret>`，每个 HTTP 请求上是 `?appid=…&secret=…`。没有换取、没有过期、也没有刷新，因此服务端构建的每条 URL 都是一份凭据，任何错误信息都不得引用它。`host` 是这套配置里唯一非机密的字段，而且**必填**——接入地址由部署方决定，本产品没有可假定的默认值；它只接受裸主机名，带协议、路径或 `:端口` 的写法会被拒绝（端口固定是平台自己的 8282，不是可配置项），因为拼进 URL 时它们要么被静默丢弃、要么拼出第二个端口。
 
 **事件走一条长连接，每一帧都要确认。** 一条 WebSocket 承载该机器人参与的全部会话，没有按会话订阅的帧，也没有需要暴露的回调地址。带顶层 `event_id` 的帧会在被读取**之前**以 `{"ack": "<event_id>"}` 应答，平台则会重投任何未确认的帧；确认与去重因此是两件独立的事，都挂在 `event_id` 上。断线后按 2/5/10/30/60 秒退避重连，此后一直用最后一档。
 

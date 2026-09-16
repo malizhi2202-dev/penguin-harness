@@ -37,9 +37,6 @@ import type {
 } from "./connector.js";
 import { collectUnderCap, sniffImageMime } from "./media.js";
 
-/** The IM host every deployment used so far points at (a binding may override it). */
-export const TUITUI_DEFAULT_HOST = "im.example.com";
-
 /** The robot API's TLS port. The platform publishes no other, so this is not configurable. */
 export const TUITUI_PORT = 8282;
 
@@ -79,7 +76,7 @@ const SEEN_EVENT_KEEP = 1_000;
 export interface TuituiCredentials {
   appId: string;
   appSecret: string;
-  /** IM host, e.g. `im.example.com`. */
+  /** IM host as the platform gives it: a bare host name, typed per binding. */
   host: string;
 }
 

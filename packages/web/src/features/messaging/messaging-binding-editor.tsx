@@ -65,7 +65,6 @@ import { toastError, toastInfo, toastSuccess } from "../../components/ui/toast";
 import { QQScanConnect } from "./qq-scan-connect";
 import { WeChatScanConnect } from "./wechat-scan-connect";
 import {
-  TUITUI_DEFAULT_HOST,
   bindingsToForm,
   emptyMessagingForm,
   formDirty,
@@ -1021,8 +1020,9 @@ export function MessagingBindingBody({ b }: { b: MessagingBindingEditorState }) 
             />
           )}
           {/* The host goes last, under both halves of the credential: it is the field a user
-              changes least, and blanking it means the platform's own default rather than an
-              error. Its rule is formatting, so it stays visible under the field. */}
+              changes least. It is required — the platform's deployment decides it, so nothing
+              here can fill it in — and its rule is formatting, so it stays visible under the
+              field rather than behind a "?". */}
           <Input
             size="sm"
             label={S.tuitui.host}
@@ -1031,7 +1031,7 @@ export function MessagingBindingBody({ b }: { b: MessagingBindingEditorState }) 
             value={form.tuitui.host}
             onChange={(e) => b.patchForm({ tuitui: { ...form.tuitui, host: e.target.value } })}
             className="font-mono"
-            placeholder={TUITUI_DEFAULT_HOST}
+            placeholder={S.tuitui.hostPlaceholder}
             autoComplete="off"
           />
           {/* This channel's rule that cannot wait for a collapsed fold: the platform pushes

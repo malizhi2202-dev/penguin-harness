@@ -2213,6 +2213,8 @@ Scenarios:
     host: "Host",
     /** Formatting, so it stays on screen under the field rather than behind a "?". */
     hostHint: "A bare host name (for example im.example.com) — no https://, no path and no port",
+    /** A shape to copy, not a value to keep: the host belongs to whoever runs the platform. */
+    hostPlaceholder: "im.example.com",
     invalidHost: "The host must be a bare host name, with no scheme, path or port",
     /** Why "send test message" is disabled before the bot has ever been messaged. */
     testMessageNoChat:
@@ -2233,7 +2235,7 @@ Scenarios:
     /** The setup FAQ fold's steps. */
     setupSteps: [
       "Create a robot in Tuitui and take its App ID and App Secret",
-      "Fill both into the form above; leave the host empty for the default im.example.com",
+      "Fill both into the form above, and type the host name the platform gives you (no https://, no path, no port)",
       "Save, then enable the connection — connecting is subscribing: one long connection carries every conversation the robot takes part in",
       "Message the robot in Tuitui; in a group, @ it",
     ],

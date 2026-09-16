@@ -79,7 +79,6 @@ import type { AppEnv } from "../../auth/middleware.js";
 import type { MessagingBindingRow } from "../../db/repos/messaging-bindings.js";
 import type { SessionRow } from "../../db/repos/sessions.js";
 import { FEISHU_DEFAULT_DOMAIN, feishuConfigOf } from "../../runtime/messaging/feishu-connector.js";
-import { TUITUI_DEFAULT_HOST } from "../../runtime/messaging/tuitui-connector.js";
 import { telegramBotIdOf } from "../../runtime/messaging/telegram-connector.js";
 import { maskApiKey } from "../../services/project-config-service.js";
 import { HttpError } from "../errors.js";
@@ -132,8 +131,8 @@ function qqFieldsOf(row: MessagingBindingRow): { appId: string; appSecret: strin
 /**
  * The stored tuitui config, tolerated loosely (a malformed document reads as blanks).
  *
- * `host` falls back rather than reading as blank: a document saved before the field existed,
- * or by hand without it, still points at the one host the platform publishes.
+ * `host` reads as blank when the document has none, which the callers that need one report
+ * as a missing field rather than silently pointing somewhere.
  */
 function tuituiFieldsOf(row: MessagingBindingRow): {
   appId: string;
@@ -144,7 +143,7 @@ function tuituiFieldsOf(row: MessagingBindingRow): {
   return {
     appId: typeof appId === "string" ? appId : row.accountId,
     appSecret: typeof appSecret === "string" ? appSecret : "",
-    host: typeof host === "string" && host !== "" ? host : TUITUI_DEFAULT_HOST,
+    host: typeof host === "string" ? host : "",
   };
 }
 
@@ -254,17 +253,23 @@ const CHANNEL_SPECS: Readonly<Record<MessagingChannel, MessagingChannelSpec>> = 
 };
 
 /**
- * Normalizes a Tuitui host input: blank → the platform's own host; anything else must be a
- * bare host name.
+ * Normalizes a Tuitui host input, which is required: there is no host this product may assume,
+ * because the platform's own deployment decides it and the binding carries it.
  *
  * A scheme, a path or a `:port` is refused rather than normalized away, because all three
  * would be silently wrong in the URL this is pasted into: the calls are built as
  * `https://<host>:8282/robot…`, so a port typed here would either be dropped or produce a
- * second one. The platform's port is not a per-installation choice.
+ * second one. The platform's port is not a per-installation choice either.
  */
 function parseTuituiHost(raw: string | undefined): string {
   const trimmed = raw?.trim() ?? "";
-  if (trimmed === "") return TUITUI_DEFAULT_HOST;
+  if (trimmed === "") {
+    throw new HttpError(
+      400,
+      "tuitui_host_required",
+      "host is required: the platform's host name, without scheme, path or port.",
+    );
+  }
   if (!/^[A-Za-z0-9.-]+$/.test(trimmed)) {
     throw badRequest("host must be a host name such as im.example.com (no scheme, path or port).");
   }
@@ -978,7 +983,6 @@ export function sessionMessagingRoutes(deps: AppDeps): Hono<AppEnv> {
     const body = await readJson(c);
     const appId = requireString(body, "appId", { minLen: 1, maxLen: 200 }).trim();
     if (appId === "") throw badRequest("appId must not be blank.");
-    const host = parseTuituiHost(optionalString(body, "host", { maxLen: 200 }));
     const existing = deps.messagingRepo.find(row.sessionId, "tuitui");
     const { secret: appSecret } = resolveSecret({
       typed: optionalString(body, "appSecret", { maxLen: 500 })?.trim(),
@@ -988,6 +992,17 @@ export function sessionMessagingRoutes(deps: AppDeps): Hono<AppEnv> {
       requiredCode: "tuitui_secret_required",
       requiredMessage: "appSecret is required to bind.",
     });
+    // Typed, or kept from the stored binding when the body omits it; a first save without one
+    // is refused, since there is no host this product may assume (see parseTuituiHost). Read
+    // after the credential so a first bind reports the missing half of the PAIR first.
+    const rawHost = optionalString(body, "host", { maxLen: 200 })?.trim();
+    const host = parseTuituiHost(
+      rawHost !== undefined && rawHost !== ""
+        ? rawHost
+        : existing !== null
+          ? tuituiFieldsOf(existing).host
+          : undefined,
+    );
     if (existing !== null && existing.enabled) guardAccountFree(row.sessionId, "tuitui", appId);
     const saved = deps.messagingRepo.upsert({
       sessionId: row.sessionId,
@@ -1011,16 +1026,17 @@ export function sessionMessagingRoutes(deps: AppDeps): Hono<AppEnv> {
     const appId = optionalString(body, "appId", { maxLen: 200 })?.trim() || storedFields?.appId;
     const appSecret =
       optionalString(body, "appSecret", { maxLen: 500 })?.trim() || storedFields?.appSecret;
-    const rawHost = optionalString(body, "host", { maxLen: 200 })?.trim();
-    const host = parseTuituiHost(
-      rawHost !== undefined && rawHost !== "" ? rawHost : storedFields?.host,
-    );
     if (appId === undefined || appId === "") {
       throw badRequest("appId is required (no stored binding to fall back to).");
     }
     if (appSecret === undefined || appSecret === "") {
       throw new HttpError(400, "tuitui_secret_required", "appSecret is required to test.");
     }
+    // Same three fields, same order as the save above: identity, credential, destination.
+    const rawHost = optionalString(body, "host", { maxLen: 200 })?.trim();
+    const host = parseTuituiHost(
+      rawHost !== undefined && rawHost !== "" ? rawHost : storedFields?.host,
+    );
     const result = await deps.messaging.testCredentials("tuitui", { appId, appSecret, host });
     return c.json({
       ok: result.ok,

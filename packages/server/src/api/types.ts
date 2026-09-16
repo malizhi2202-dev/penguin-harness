@@ -1885,7 +1885,7 @@ export interface TuituiBindingInfo extends MessagingBindingCommon {
   appId: string;
   /** Masked app secret (site-wide mask rule); absent when none is stored. */
   appSecretMasked?: string;
-  /** IM host, e.g. `im.example.com`. The port is the platform's own (8282) and is not a field. */
+  /** IM host as the platform gives it, e.g. `im.example.com`. The port is the platform's own (8282) and is not a field. */
   host: string;
 }
 

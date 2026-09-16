@@ -41,12 +41,6 @@ import type {
 /** Default Feishu open-platform domain (shown prefilled; Lark tenants overwrite it). */
 export const FEISHU_DEFAULT_DOMAIN = "https://open.feishu.cn";
 
-/**
- * Default Tuitui IM host, shown prefilled — the one deployment the platform publishes. The
- * port is the platform's own and is not a field, so this is a bare host name.
- */
-export const TUITUI_DEFAULT_HOST = "im.example.com";
-
 /** The token shape @BotFather issues — mirrors the server's identity rule, for immediate feedback. */
 const TELEGRAM_TOKEN_RE = /^\d+:[A-Za-z0-9_-]{5,}$/;
 
@@ -192,12 +186,12 @@ export function emptyMessagingForm(channel: MessagingChannel = "feishu"): Messag
       finalReplyOnly: false,
       renderMarkdown: true,
     },
-    // The host is prefilled, like Feishu's domain: it is a value to overwrite when the
-    // platform lives elsewhere, not one to know in advance.
+    // Unlike Feishu's domain there is nothing to prefill: the host belongs to whoever runs
+    // the platform, so an empty field is a required field (the server refuses a hostless save).
     tuitui: {
       appId: "",
       appSecret: "",
-      host: TUITUI_DEFAULT_HOST,
+      host: "",
       clearSecret: false,
       linePerMessage: false,
       finalReplyOnly: false,
@@ -352,10 +346,11 @@ export function formToPut(form: MessagingFormState, hasStoredSecret: boolean): M
     const appSecret = form.tuitui.appSecret.trim();
     const clearing = appSecret === "" && form.tuitui.clearSecret && hasStoredSecret;
     if (appSecret === "" && !hasStoredSecret) errors.appSecret = "required";
-    // A blank host means "the platform's own", like a blank Feishu domain means the default:
-    // the field is prefilled, and clearing it is not an error but a gesture.
-    const host = form.tuitui.host.trim() || TUITUI_DEFAULT_HOST;
-    if (!TUITUI_HOST_RE.test(host)) errors.host = "host_invalid";
+    // Required, unlike the Feishu domain beside it: nothing here has a default to fall back
+    // to, so an empty field is reported as missing rather than silently replacing it.
+    const host = form.tuitui.host.trim();
+    if (host === "") errors.host = "required";
+    else if (!TUITUI_HOST_RE.test(host)) errors.host = "host_invalid";
     if (Object.keys(errors).length > 0) return { ok: false, errors };
     return {
       ok: true,

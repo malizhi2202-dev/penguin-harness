@@ -19,7 +19,6 @@ import type {
 } from "@prismshadow/penguin-server/api";
 import {
   FEISHU_DEFAULT_DOMAIN,
-  TUITUI_DEFAULT_HOST,
   bindingsToForm,
   emptyMessagingForm,
   formDirty,
@@ -144,11 +143,12 @@ describe("emptyMessagingForm / bindingsToForm", () => {
         finalReplyOnly: false,
         renderMarkdown: true,
       },
-      // Tuitui's host starts on the platform's own, like Feishu's domain.
+      // Tuitui's host starts empty: it is required, and it belongs to whoever runs the
+      // platform, so nothing here can prefill it (unlike Feishu's domain).
       tuitui: {
         appId: "",
         appSecret: "",
-        host: TUITUI_DEFAULT_HOST,
+        host: "",
         clearSecret: false,
         linePerMessage: false,
         finalReplyOnly: false,
@@ -199,7 +199,7 @@ describe("emptyMessagingForm / bindingsToForm", () => {
       tuitui: {
         appId: "",
         appSecret: "",
-        host: TUITUI_DEFAULT_HOST,
+        host: "",
         clearSecret: false,
         linePerMessage: false,
         finalReplyOnly: false,
@@ -408,6 +408,8 @@ describe("the delivery flags", () => {
       form.qq.appId = "102000001";
       form.telegram.botToken = "7000000001:secret-token-AAAA";
       form.tuitui.appId = "tt_robot_1";
+      form.tuitui.appSecret = "s";
+      form.tuitui.host = "im.example.com";
       for (const values of [
         { linePerMessage: false, finalReplyOnly: false },
         { linePerMessage: true, finalReplyOnly: false },
@@ -735,19 +737,19 @@ describe("the Tuitui channel", () => {
     });
   });
 
-  it("requires both halves on a first bind, and defaults a blank host", () => {
+  it("requires both halves and the host on a first bind", () => {
     expect(formToPut(emptyMessagingForm("tuitui"), false)).toEqual({
       ok: false,
-      errors: { appId: "required", appSecret: "required" },
+      errors: { appId: "required", appSecret: "required", host: "required" },
     });
 
     const form = emptyMessagingForm("tuitui");
     form.tuitui.appId = "tt_robot_1";
     form.tuitui.appSecret = "s";
-    // A blank host is the "use the platform's own" gesture, like a blank Feishu domain.
+    // Required, so a blank host is reported as missing rather than replaced by a default this
+    // product has no business naming.
     form.tuitui.host = "   ";
-    const blank = formToPut(form, false);
-    expect(blank.ok && blank.channel === "tuitui" && blank.body.host).toBe(TUITUI_DEFAULT_HOST);
+    expect(formToPut(form, false)).toEqual({ ok: false, errors: { host: "required" } });
 
     // The server takes a bare host name and nothing else: a scheme, a path and a port are
     // each refused rather than silently dropped by the URL this would be pasted into.
@@ -815,7 +817,7 @@ describe("the Tuitui channel", () => {
 
     const baseline = bindingsToForm([STORED_TUITUI]);
     expect(formDirty(form, baseline)).toBe(false);
-    form.tuitui.host = TUITUI_DEFAULT_HOST;
+    form.tuitui.host = "im.example.com";
     expect(formDirty(form, baseline)).toBe(true);
     const typed = bindingsToForm([STORED_TUITUI]);
     typed.tuitui.appSecret = "typed";

@@ -15,8 +15,9 @@ the same editor the other four channels use.
 
 - The binding stores an `appId`, an `appSecret` and a `host`. The App ID is the account identity,
   the secret follows the site-wide mask rule and never round-trips, and `host` is the one field
-  that is not secret: blank means `im.example.com`, and only a bare host name is accepted — a scheme, a
-  path or an explicit port is refused, since the port is the platform's own 8282.
+  that is not secret: it is required, because the deployment decides where the platform lives,
+  and only a bare host name is accepted — a scheme, a path or an explicit port is refused, since
+  the port is the platform's own 8282.
 - Every call carries the credential in its query string — `?auth=<appId>.<appSecret>` on the event
   socket and `?appid=…&secret=…` on each HTTP request — because the platform has no token
   exchange: nothing is minted, nothing expires, and every URL the server builds is treated as a

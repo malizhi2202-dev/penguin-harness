@@ -21,7 +21,6 @@ import type {
   TuituiTransportOpts,
 } from "../src/runtime/messaging/tuitui-api.js";
 import {
-  TUITUI_DEFAULT_HOST,
   TUITUI_INVALID_CREDENTIALS_CODE,
   TUITUI_MAX_TEXT_CHARS,
   TuituiApiError,
@@ -38,7 +37,7 @@ import { waitFor } from "./helpers.js";
 const CREDS: TuituiCredentials = {
   appId: "tuitui-app-id",
   appSecret: "tuitui-app-secret-ABCD-1234",
-  host: TUITUI_DEFAULT_HOST,
+  host: "im.example.com",
 };
 
 const SEP = "\u0001";
@@ -450,7 +449,7 @@ describe("the Tuitui HTTP client", () => {
       await client.sendText("alice", "hello there");
       expect(calls).toHaveLength(1);
       expect(calls[0]?.url).toBe(
-        `https://im.example.com:8282/robot/message/custom/send?appid=${CREDS.appId}&secret=${CREDS.appSecret}`,
+        `https://${CREDS.host}:8282/robot/message/custom/send?appid=${CREDS.appId}&secret=${CREDS.appSecret}`,
       );
       expect(calls[0]?.method).toBe("POST");
       expect(bodyOf(calls[0]!)).toEqual({

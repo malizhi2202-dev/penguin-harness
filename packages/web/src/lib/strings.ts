@@ -2171,6 +2171,8 @@ Benchmark：
     host: "接入地址",
     /** Formatting, so it stays on screen under the field rather than behind a "?". */
     hostHint: "只填主机名，例如 im.example.com——不要带 https://、路径或端口",
+    /** A shape to copy, not a value to keep: the host belongs to whoever runs the platform. */
+    hostPlaceholder: "im.example.com",
     invalidHost: "接入地址需为裸主机名，不能带协议、路径或端口",
     /** Why "send test message" is disabled before the bot has ever been messaged. */
     testMessageNoChat: "先在推推中给机器人发一条消息，机器人才知道要发到哪个会话",
@@ -2189,7 +2191,7 @@ Benchmark：
     /** The setup FAQ fold's steps. */
     setupSteps: [
       "在推推里创建一个机器人，取得它的 App ID 与 App Secret",
-      "把这两个值填入上方表单；接入地址留空即为默认的 im.example.com",
+      "把这两个值填入上方表单，接入地址填平台提供的主机名（不带 https://、路径或端口）",
       "保存后启用连接——连接即订阅，这一条长连接会收到机器人参与的全部会话",
       "在推推里给机器人发一条消息；在群里则需要 @ 它",
     ],

@@ -34,7 +34,7 @@ import type {
   TuituiInboundEvent,
   TuituiTransport,
 } from "../src/runtime/messaging/tuitui-api.js";
-import { TUITUI_DEFAULT_HOST, createTuituiTransport } from "../src/runtime/messaging/tuitui-api.js";
+import { createTuituiTransport } from "../src/runtime/messaging/tuitui-api.js";
 import { TuituiConnector, tuituiConfigOf } from "../src/runtime/messaging/tuitui-connector.js";
 import { apiClient, createTestApp, provisionUser, waitFor } from "./helpers.js";
 import type { TestApp } from "./helpers.js";
@@ -44,6 +44,8 @@ const SID2 = "session-2026-08-27-10-00-01-t9000002";
 const BASE = (sid: string) => `/api/sessions/${sid}/messaging/tuitui`;
 const APP_ID = "tuitui-app-id";
 const APP_SECRET = "tuitui-app-secret-ABCD-1234";
+/** A host name the platform could publish: reserved for documentation, so no deployment owns it. */
+const EXAMPLE_HOST = "im.example.com";
 const PEER = "alice";
 const GROUP_ID = "1234567890123456";
 const SEP = "\u0001";
@@ -225,12 +227,17 @@ function sessionRowOf(sessionId: string, projectId: string): SessionRow {
 // ---------------------------------------------------------------------------
 
 describe("tuitui config", () => {
-  it("narrows a stored config, defaulting the host and rejecting a malformed one", () => {
-    expect(tuituiConfigOf({ appId: APP_ID, appSecret: APP_SECRET })).toEqual({
+  it("narrows a stored config, requiring all three fields", () => {
+    expect(tuituiConfigOf({ appId: APP_ID, appSecret: APP_SECRET, host: EXAMPLE_HOST })).toEqual({
       appId: APP_ID,
       appSecret: APP_SECRET,
-      host: TUITUI_DEFAULT_HOST,
+      host: EXAMPLE_HOST,
     });
+    // No host to fall back to: this product does not assume which deployment a binding talks
+    // to, so a document without one is malformed like any other.
+    expect(() => tuituiConfigOf({ appId: APP_ID, appSecret: APP_SECRET })).toThrow(
+      /malformed tuitui binding config/,
+    );
     expect(
       tuituiConfigOf({ appId: APP_ID, appSecret: APP_SECRET, host: "im.internal.example" }),
     ).toEqual({ appId: APP_ID, appSecret: APP_SECRET, host: "im.internal.example" });
@@ -244,7 +251,7 @@ describe("the tuitui connector over its transport seam", () => {
     const fake = new FakeTuituiTransport();
     const seen: MessagingInboundMessage[] = [];
     await new TuituiConnector(fake).connect(
-      { appId: APP_ID, appSecret: APP_SECRET },
+      { appId: APP_ID, appSecret: APP_SECRET, host: EXAMPLE_HOST },
       { onMessage: (msg) => void seen.push(msg) },
     );
 
@@ -268,7 +275,7 @@ describe("the tuitui connector over its transport seam", () => {
     const fake = new FakeTuituiTransport();
     const seen: MessagingInboundMessage[] = [];
     await new TuituiConnector(fake).connect(
-      { appId: APP_ID, appSecret: APP_SECRET },
+      { appId: APP_ID, appSecret: APP_SECRET, host: EXAMPLE_HOST },
       { onMessage: (msg) => void seen.push(msg) },
     );
     await fake.lastSession().fire(inbound({ nativeMessageId: "m-42" }));
@@ -279,7 +286,7 @@ describe("the tuitui connector over its transport seam", () => {
     const fake = new FakeTuituiTransport();
     const seen: MessagingInboundMessage[] = [];
     await new TuituiConnector(fake).connect(
-      { appId: APP_ID, appSecret: APP_SECRET },
+      { appId: APP_ID, appSecret: APP_SECRET, host: EXAMPLE_HOST },
       { onMessage: (msg) => void seen.push(msg) },
     );
     await fake.lastSession().fire(
@@ -313,7 +320,7 @@ describe("the tuitui connector over its transport seam", () => {
     const errors: unknown[] = [];
     let ready = 0;
     await new TuituiConnector(fake).connect(
-      { appId: APP_ID, appSecret: APP_SECRET },
+      { appId: APP_ID, appSecret: APP_SECRET, host: EXAMPLE_HOST },
       {
         onMessage: () => {},
         onReady: () => void (ready += 1),
@@ -324,11 +331,18 @@ describe("the tuitui connector over its transport seam", () => {
     expect(fake.sessions[0]?.creds).toEqual({
       appId: APP_ID,
       appSecret: APP_SECRET,
-      host: TUITUI_DEFAULT_HOST,
+      host: EXAMPLE_HOST,
     });
 
     await expect(
       new TuituiConnector(fake).connect({ appSecret: APP_SECRET }, { onMessage: () => {} }),
+    ).rejects.toThrow(/malformed tuitui binding config/);
+    // Same for a stored pair with no host at all.
+    await expect(
+      new TuituiConnector(fake).connect(
+        { appId: APP_ID, appSecret: APP_SECRET },
+        { onMessage: () => {} },
+      ),
     ).rejects.toThrow(/malformed tuitui binding config/);
   });
 });
@@ -342,7 +356,10 @@ describe("tuitui binding routes", () => {
 
   /** Save the credentials, then flip the toggle on and wait for the connection. */
   const bindEnabled = async (sid: string, appId = APP_ID, put: Record<string, unknown> = {}) => {
-    expect((await api.put(BASE(sid), { appId, appSecret: APP_SECRET, ...put })).status).toBe(200);
+    expect(
+      (await api.put(BASE(sid), { appId, appSecret: APP_SECRET, host: EXAMPLE_HOST, ...put }))
+        .status,
+    ).toBe(200);
     expect((await api.post(`${BASE(sid)}/state`, { enabled: true })).status).toBe(200);
     await waitFor(() => t.deps.messaging.statusOf(sid, "tuitui").state === "connected");
   };
@@ -365,7 +382,11 @@ describe("tuitui binding routes", () => {
   // —— Routes ——————————————————————————————————————————————————————————————
 
   it("PUT saves the pair and the host only (secret masked, App ID as the account, disabled)", async () => {
-    const res = await api.put(BASE(SID), { appId: APP_ID, appSecret: APP_SECRET });
+    const res = await api.put(BASE(SID), {
+      appId: APP_ID,
+      appSecret: APP_SECRET,
+      host: EXAMPLE_HOST,
+    });
     expect(res.status).toBe(200);
     const body = (await res.json()) as TuituiBindingResponse;
     expect(body.binding?.channel).toBe("tuitui");
@@ -377,25 +398,33 @@ describe("tuitui binding routes", () => {
     expect(fake.sessions).toHaveLength(0);
     // The App ID is the account identity, exactly as the Feishu app id is.
     expect(t.deps.messagingRepo.find(SID, "tuitui")?.accountId).toBe(APP_ID);
-    // The host is stored (not assumed), and defaults when it is not typed.
-    expect(body.binding?.host).toBe(TUITUI_DEFAULT_HOST);
+    // The host is stored, never assumed.
+    expect(body.binding?.host).toBe(EXAMPLE_HOST);
     const custom = (await (
       await api.put(BASE(SID), { appId: APP_ID, host: "im.internal.example" })
     ).json()) as TuituiBindingResponse;
     expect(custom.binding?.host).toBe("im.internal.example");
     expect(t.deps.messagingRepo.find(SID, "tuitui")?.config.appSecret).toBe(APP_SECRET);
 
-    // Blank secret keeps the stored one; still dark.
+    // A save that OMITS the host keeps the stored one, like an omitted secret.
     expect((await api.put(BASE(SID), { appId: APP_ID })).status).toBe(200);
+    expect(t.deps.messagingRepo.find(SID, "tuitui")?.config.host).toBe("im.internal.example");
     expect(t.deps.messagingRepo.find(SID, "tuitui")?.config.appSecret).toBe(APP_SECRET);
     expect(fake.sessions).toHaveLength(0);
   });
 
-  it("refuses a first bind with no secret, and a host that is not a host name", async () => {
+  it("refuses a first bind with no secret or no host, and a host that is not a host name", async () => {
     const bare = await api.put(BASE(SID), { appId: APP_ID });
     expect(bare.status).toBe(400);
     expect(((await bare.json()) as { error: { code: string } }).error.code).toBe(
       "tuitui_secret_required",
+    );
+
+    // A secret but no host: nothing to assume, so the save is refused with its own code.
+    const hostless = await api.put(BASE(SID), { appId: APP_ID, appSecret: APP_SECRET });
+    expect(hostless.status).toBe(400);
+    expect(((await hostless.json()) as { error: { code: string } }).error.code).toBe(
+      "tuitui_host_required",
     );
 
     for (const host of [
@@ -434,7 +463,7 @@ describe("tuitui binding routes", () => {
     expect(fake.lastSession().creds).toEqual({
       appId: APP_ID,
       appSecret: APP_SECRET,
-      host: TUITUI_DEFAULT_HOST,
+      host: EXAMPLE_HOST,
     });
 
     const rotated = "tuitui-app-secret-EFGH-5678";
@@ -452,7 +481,13 @@ describe("tuitui binding routes", () => {
     t.deps.sessionsRepo.insert(sessionRowOf(SID2, projectId));
     await bindEnabled(SID);
     expect(
-      (await api.put(BASE(SID2), { appId: APP_ID, appSecret: "other-secret-9999" })).status,
+      (
+        await api.put(BASE(SID2), {
+          appId: APP_ID,
+          appSecret: "other-secret-9999",
+          host: EXAMPLE_HOST,
+        })
+      ).status,
     ).toBe(200);
 
     const blocked = await api.post(`${BASE(SID2)}/state`, { enabled: true });
@@ -476,7 +511,7 @@ describe("tuitui binding routes", () => {
       channel: "tuitui",
       appId: APP_ID,
       appSecretMasked: "tuit…1234",
-      host: TUITUI_DEFAULT_HOST,
+      host: EXAMPLE_HOST,
       enabled: true,
     });
     expect(entry?.status.state).toBe("connected");
@@ -528,7 +563,7 @@ describe("tuitui binding routes", () => {
   });
 
   it("reports a rejected credential as ok:false rather than an HTTP error", async () => {
-    await api.put(BASE(SID), { appId: APP_ID, appSecret: APP_SECRET });
+    await api.put(BASE(SID), { appId: APP_ID, appSecret: APP_SECRET, host: EXAMPLE_HOST });
     fake.failAuth = "Tuitui rejected these credentials";
     const res = await api.post(`${BASE(SID)}/test`, {});
     expect(res.status).toBe(200);
