@@ -14,10 +14,12 @@ import type {
   FeishuBindingInfo,
   QQBindingInfo,
   TelegramBindingInfo,
+  TuituiBindingInfo,
   WeChatBindingInfo,
 } from "@prismshadow/penguin-server/api";
 import {
   FEISHU_DEFAULT_DOMAIN,
+  TUITUI_DEFAULT_HOST,
   bindingsToForm,
   emptyMessagingForm,
   formDirty,
@@ -87,6 +89,25 @@ const STORED_WECHAT: WeChatBindingInfo = {
   updatedAt: "2026-08-28T00:00:00.000Z",
 };
 
+const STORED_TUITUI: TuituiBindingInfo = {
+  channel: "tuitui",
+  sessionId: "session-1",
+  appId: "tt_robot_1",
+  appSecretMasked: "tt-r…-9999",
+  // Not the platform's default host: a load that dropped the stored value would still look
+  // right against a binding that happened to point at im.example.com.
+  host: "im.internal.example.com",
+  enabled: false,
+  linePerMessage: true,
+  finalReplyOnly: false,
+  // The non-default value, for the same reason as the other fixtures': ON is the default, so
+  // only a stored `false` proves the value was actually read.
+  renderMarkdown: false,
+  lastChatKnown: true,
+  createdAt: "2026-08-29T00:00:00.000Z",
+  updatedAt: "2026-08-29T00:00:00.000Z",
+};
+
 describe("emptyMessagingForm / bindingsToForm", () => {
   it("starts empty forms on Feishu with the default domain, both channels blank", () => {
     expect(emptyMessagingForm()).toEqual({
@@ -119,6 +140,16 @@ describe("emptyMessagingForm / bindingsToForm", () => {
       // WeChat's sub-state is the preferences and the clear box: its token has no field.
       wechat: {
         clearToken: false,
+        linePerMessage: false,
+        finalReplyOnly: false,
+        renderMarkdown: true,
+      },
+      // Tuitui's host starts on the platform's own, like Feishu's domain.
+      tuitui: {
+        appId: "",
+        appSecret: "",
+        host: TUITUI_DEFAULT_HOST,
+        clearSecret: false,
         linePerMessage: false,
         finalReplyOnly: false,
         renderMarkdown: true,
@@ -165,19 +196,33 @@ describe("emptyMessagingForm / bindingsToForm", () => {
         finalReplyOnly: false,
         renderMarkdown: true,
       },
+      tuitui: {
+        appId: "",
+        appSecret: "",
+        host: TUITUI_DEFAULT_HOST,
+        clearSecret: false,
+        linePerMessage: false,
+        finalReplyOnly: false,
+        renderMarkdown: true,
+      },
     });
     // All of them coexist: every saved channel loads its own non-secret fields.
-    const all = bindingsToForm([STORED_FEISHU, STORED_TELEGRAM, STORED_QQ]);
+    const all = bindingsToForm([STORED_FEISHU, STORED_TELEGRAM, STORED_QQ, STORED_TUITUI]);
     expect(all.feishu.appId).toBe("cli_abc");
     expect(all.qq.appId).toBe("102000001");
     expect(all.qq.appSecret).toBe("");
+    expect(all.tuitui.appId).toBe("tt_robot_1");
+    expect(all.tuitui.host).toBe("im.internal.example.com");
     // Each flag loads from the channel that stored it, and from nowhere else.
     expect(all.qq.finalReplyOnly).toBe(true);
     expect(all.telegram.finalReplyOnly).toBe(false);
     expect(all.feishu.linePerMessage).toBe(false);
+    expect(all.tuitui.linePerMessage).toBe(true);
+    expect(all.feishu.renderMarkdown).toBe(true);
     // No enabled channel: the first saved one is selected; nothing saved: Feishu.
     expect(bindingsToForm([STORED_FEISHU]).channel).toBe("feishu");
     expect(bindingsToForm([STORED_QQ]).channel).toBe("qq");
+    expect(bindingsToForm([STORED_TUITUI]).channel).toBe("tuitui");
     expect(bindingsToForm([]).channel).toBe("feishu");
   });
 });
@@ -357,10 +402,12 @@ describe("the delivery flags", () => {
       [emptyMessagingForm("feishu"), "feishu"],
       [emptyMessagingForm("telegram"), "telegram"],
       [emptyMessagingForm("qq"), "qq"],
+      [emptyMessagingForm("tuitui"), "tuitui"],
     ] as const) {
       form.feishu.appId = "cli_x";
       form.qq.appId = "102000001";
       form.telegram.botToken = "7000000001:secret-token-AAAA";
+      form.tuitui.appId = "tt_robot_1";
       for (const values of [
         { linePerMessage: false, finalReplyOnly: false },
         { linePerMessage: true, finalReplyOnly: false },
@@ -638,5 +685,156 @@ describe("the WeChat channel", () => {
     // Only a stored token is testable: this channel has no draft credential, ever.
     expect(formTestable(emptyMessagingForm("wechat"), true)).toBe(true);
     expect(formTestable(emptyMessagingForm("wechat"), false)).toBe(false);
+  });
+});
+
+describe("the Tuitui channel", () => {
+  it("loads the App ID and the stored host, and leaves the secret empty", () => {
+    const form = bindingsToForm([STORED_TUITUI]);
+    // The selector lands on the only saved channel; both non-secret fields load, the secret never does.
+    expect(form.channel).toBe("tuitui");
+    expect(form.tuitui.appId).toBe("tt_robot_1");
+    expect(form.tuitui.appSecret).toBe("");
+    expect(form.tuitui.clearSecret).toBe(false);
+    // The host is a stored value: a load that ignored it would fall back to the default and
+    // only look right for a binding that happened to point at the platform's own host.
+    expect(form.tuitui.host).toBe("im.internal.example.com");
+    // Both delivery preferences load from the stored config, each on its own.
+    expect(form.tuitui.linePerMessage).toBe(true);
+    expect(form.tuitui.renderMarkdown).toBe(false);
+  });
+
+  it("submits the pair and the host, omitting a blank secret", () => {
+    const form = bindingsToForm([STORED_TUITUI]);
+    expect(formToPut(form, true)).toEqual({
+      ok: true,
+      channel: "tuitui",
+      // No `appSecret` key at all: an omitted secret is what tells the server to keep the
+      // stored one, and the masked value must never round-trip.
+      body: {
+        appId: "tt_robot_1",
+        host: "im.internal.example.com",
+        linePerMessage: true,
+        finalReplyOnly: false,
+        renderMarkdown: false,
+      },
+    });
+
+    form.tuitui.appSecret = "  fresh-secret  ";
+    expect(formToPut(form, true)).toEqual({
+      ok: true,
+      channel: "tuitui",
+      body: {
+        appId: "tt_robot_1",
+        appSecret: "fresh-secret",
+        host: "im.internal.example.com",
+        linePerMessage: true,
+        finalReplyOnly: false,
+        renderMarkdown: false,
+      },
+    });
+  });
+
+  it("requires both halves on a first bind, and defaults a blank host", () => {
+    expect(formToPut(emptyMessagingForm("tuitui"), false)).toEqual({
+      ok: false,
+      errors: { appId: "required", appSecret: "required" },
+    });
+
+    const form = emptyMessagingForm("tuitui");
+    form.tuitui.appId = "tt_robot_1";
+    form.tuitui.appSecret = "s";
+    // A blank host is the "use the platform's own" gesture, like a blank Feishu domain.
+    form.tuitui.host = "   ";
+    const blank = formToPut(form, false);
+    expect(blank.ok && blank.channel === "tuitui" && blank.body.host).toBe(TUITUI_DEFAULT_HOST);
+
+    // The server takes a bare host name and nothing else: a scheme, a path and a port are
+    // each refused rather than silently dropped by the URL this would be pasted into.
+    for (const bad of [
+      "https://im.example.com/robot",
+      "im.example.com/robot",
+      "im.example.com:8282",
+    ]) {
+      form.tuitui.host = bad;
+      expect(formToPut(form, false)).toEqual({ ok: false, errors: { host: "host_invalid" } });
+    }
+    form.tuitui.host = "im.example.com";
+    expect(formToPut(form, false).ok).toBe(true);
+  });
+
+  it("honours the clear checkbox after a bind, with a typed secret winning over it", () => {
+    const stored = bindingsToForm([STORED_TUITUI]);
+    stored.tuitui.clearSecret = true;
+    expect(formToPut(stored, true)).toEqual({
+      ok: true,
+      channel: "tuitui",
+      body: {
+        appId: "tt_robot_1",
+        clearAppSecret: true,
+        host: "im.internal.example.com",
+        linePerMessage: true,
+        finalReplyOnly: false,
+        renderMarkdown: false,
+      },
+    });
+    // A typed secret wins over a stale clear checkbox (the models idiom).
+    stored.tuitui.appSecret = "typed";
+    expect(formToPut(stored, true)).toEqual({
+      ok: true,
+      channel: "tuitui",
+      body: {
+        appId: "tt_robot_1",
+        appSecret: "typed",
+        host: "im.internal.example.com",
+        linePerMessage: true,
+        finalReplyOnly: false,
+        renderMarkdown: false,
+      },
+    });
+  });
+
+  it("routes its probe and its dirty/testable checks to its own fields", () => {
+    const form = bindingsToForm([STORED_TUITUI]);
+    // The filled-in fields only: a blank one falls back to the stored binding server-side.
+    expect(formToTest(form)).toEqual({
+      channel: "tuitui",
+      body: { appId: "tt_robot_1", host: "im.internal.example.com" },
+    });
+    const blanked = bindingsToForm([STORED_TUITUI]);
+    blanked.tuitui.host = "";
+    expect(formToTest(blanked)).toEqual({ channel: "tuitui", body: { appId: "tt_robot_1" } });
+    // No untrimmed draft: the host is sent as the server would store it.
+    const padded = bindingsToForm([STORED_TUITUI]);
+    padded.tuitui.host = "  im.internal.example.com  ";
+    const paddedTest = formToTest(padded);
+    expect(paddedTest.channel === "tuitui" && paddedTest.body).toEqual({
+      appId: "tt_robot_1",
+      host: "im.internal.example.com",
+    });
+
+    const baseline = bindingsToForm([STORED_TUITUI]);
+    expect(formDirty(form, baseline)).toBe(false);
+    form.tuitui.host = TUITUI_DEFAULT_HOST;
+    expect(formDirty(form, baseline)).toBe(true);
+    const typed = bindingsToForm([STORED_TUITUI]);
+    typed.tuitui.appSecret = "typed";
+    expect(formDirty(typed, baseline)).toBe(true);
+    const clearing = bindingsToForm([STORED_TUITUI]);
+    clearing.tuitui.clearSecret = true;
+    expect(formDirty(clearing, baseline)).toBe(true);
+    // ...and the unselected channels' edits are not this channel's business.
+    const other = bindingsToForm([STORED_TUITUI]);
+    other.feishu.appId = "cli_other";
+    other.telegram.botToken = "7000000001:tok";
+    expect(formDirty(other, baseline)).toBe(false);
+
+    // A stored secret is testable as-is; a draft needs both halves, like the other pair channels.
+    expect(formTestable(emptyMessagingForm("tuitui"), true)).toBe(true);
+    const half = emptyMessagingForm("tuitui");
+    half.tuitui.appId = "tt_robot_1";
+    expect(formTestable(half, false)).toBe(false);
+    half.tuitui.appSecret = "s";
+    expect(formTestable(half, false)).toBe(true);
   });
 });

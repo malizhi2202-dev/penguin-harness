@@ -126,6 +126,10 @@ import type {
   TelegramBindingResponse,
   TelegramTestRequest,
   TelegramTestResponse,
+  TuituiBindingPutRequest,
+  TuituiBindingResponse,
+  TuituiTestRequest,
+  TuituiTestResponse,
   TraceAnalysisResponse,
   TraceEventsResponse,
   TraceImportRequest,
@@ -606,16 +610,29 @@ export const putWeChatBinding = (sessionId: string, body: WeChatBindingPutReques
     { method: "PUT", body },
   );
 
+/** Saves the Tuitui App ID / App Secret pair and its host — the same save/enable split as the Feishu PUT. */
+export const putTuituiBinding = (sessionId: string, body: TuituiBindingPutRequest) =>
+  apiFetch<TuituiBindingResponse>(
+    `/api/sessions/${encodeURIComponent(sessionId)}/messaging/tuitui`,
+    { method: "PUT", body },
+  );
+
 /** The connection toggle, which is also the bind/unbind: enable connects with the STORED credentials (409 `another_channel_enabled` while the other channel is enabled, 409 `account_enabled_elsewhere` while another conversation has this bot enabled), disable releases the account. */
 export const setMessagingBindingState = (
   sessionId: string,
   channel: MessagingChannel,
   enabled: boolean,
 ) =>
-  apiFetch<FeishuBindingResponse | TelegramBindingResponse | QQBindingResponse>(
-    `/api/sessions/${encodeURIComponent(sessionId)}/messaging/${channel}/state`,
-    { method: "POST", body: { enabled } },
-  );
+  apiFetch<
+    | FeishuBindingResponse
+    | TelegramBindingResponse
+    | QQBindingResponse
+    | WeChatBindingResponse
+    | TuituiBindingResponse
+  >(`/api/sessions/${encodeURIComponent(sessionId)}/messaging/${channel}/state`, {
+    method: "POST",
+    body: { enabled },
+  });
 
 /** Feishu credential probe with the form's draft values; omitted fields fall back to the stored binding. */
 export const testFeishuBinding = (sessionId: string, body: FeishuTestRequest) =>
@@ -707,7 +724,14 @@ export const testQQBinding = (sessionId: string, body: QQTestRequest) =>
     body,
   });
 
-/** Short fixed text to the binding's last known chat (409 `feishu_no_chat` / `telegram_no_chat` / `qq_no_chat` before one exists; on QQ the send can still fail with 502 when no recent QQ message can be replied to). */
+/** Tuitui credential probe: the event socket's own handshake, so it says whether the platform accepts the pair and names no account. */
+export const testTuituiBinding = (sessionId: string, body: TuituiTestRequest) =>
+  apiFetch<TuituiTestResponse>(
+    `/api/sessions/${encodeURIComponent(sessionId)}/messaging/tuitui/test`,
+    { method: "POST", body },
+  );
+
+/** Short fixed text to the binding's last known chat (409 `feishu_no_chat` / `telegram_no_chat` / `qq_no_chat` / `tuitui_no_chat` before one exists; on QQ the send can still fail with 502 when no recent QQ message can be replied to). */
 export const sendMessagingTestMessage = (sessionId: string, channel: MessagingChannel) =>
   apiFetch<MessagingTestMessageResponse>(
     `/api/sessions/${encodeURIComponent(sessionId)}/messaging/${channel}/test-message`,

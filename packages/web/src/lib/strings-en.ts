@@ -2190,9 +2190,52 @@ Scenarios:
   },
 
   /**
+   * Tuitui-channel strings of the messaging binding editor (channel-neutral ones live under
+   * `messaging`).
+   */
+  tuitui: {
+    /** The what-binding-does FAQ fold's body (this channel's flavor). */
+    intro:
+      "Once bound, messages sent to the Tuitui robot arrive in this conversation and the agent's replies go back to Tuitui. The credential is an App ID and an App Secret sent in the URL of every call — nothing is exchanged for a token and nothing expires — and events arrive over one long-lived WebSocket, so no public address and no scan is involved.",
+    appId: "App ID",
+    appSecret: "App Secret",
+    /** Shown while a saved secret exists: submitting an empty field keeps it. */
+    appSecretKeepHint: "Leave empty to keep the stored App Secret",
+    /** The stored-secret row's clear checkbox (the models-page clear idiom). */
+    clearSecret: "Clear stored App Secret",
+    host: "Host",
+    /** Formatting, so it stays on screen under the field rather than behind a "?". */
+    hostHint: "A bare host name (for example im.example.com) — no https://, no path and no port",
+    invalidHost: "The host must be a bare host name, with no scheme, path or port",
+    /** Why "send test message" is disabled before the bot has ever been messaged. */
+    testMessageNoChat:
+      "Message the robot once in Tuitui first, so it knows which conversation to send to",
+    /**
+     * The rule that shapes group chats on this channel, stated where it is first needed:
+     * the platform pushes every group message, and only the ones addressing the robot are
+     * answered — the rest reach the user as silence.
+     */
+    groupAtOnly:
+      "In a group, only messages that @ the robot reach this conversation: Tuitui pushes every group message and the rest are dropped.",
+    /** Why no reply quotes: the platform has no reply-to field, so the anchor is the conversation. */
+    noQuote:
+      "A reply lands in the conversation the message came from and cannot quote one — Tuitui has no reply-to field. When someone quotes you, the quoted text arrives with the message as text.",
+    /** The outbound kinds, and the one the platform does not distinguish. */
+    imageAsFile:
+      "There is no separate image message type outbound: images are delivered as file messages, like files.",
+    /** The setup FAQ fold's steps. */
+    setupSteps: [
+      "Create a robot in Tuitui and take its App ID and App Secret",
+      "Fill both into the form above; leave the host empty for the default im.example.com",
+      "Save, then enable the connection — connecting is subscribing: one long connection carries every conversation the robot takes part in",
+      "Message the robot in Tuitui; in a group, @ it",
+    ],
+  },
+
+  /**
    * Session ↔ messaging-bot binding: the dock panel, the row action + dialog, and the
    * channel-neutral editor strings (per-channel fields live under `feishu` / `telegram` /
-   * `qq`).
+   * `qq` / `wechat` / `tuitui`).
    */
   messaging: {
     panelTitle: "Remote control",
@@ -2206,6 +2249,7 @@ Scenarios:
       telegram: "Telegram",
       qq: "QQ",
       wechat: "WeChat",
+      tuitui: "Tuitui",
     },
     /**
      * Shared link labels: the tutorial (in the setup FAQ fold) and, at the credential field's
@@ -2262,7 +2306,9 @@ Scenarios:
     renderMarkdownHelpQQ:
       "A reply's Markdown arrives as formatting instead of as `**characters**`. QQ shows headings, bold, italic, strikethrough, lists, quotes, rules and links; it has no code formatting and no tables, so a code block arrives as plain lines and a table as its rows. If QQ refuses the formatting, the reply is sent as plain text — which costs one more of the few replies QQ allows per message.",
     renderMarkdownHelpWeChat:
-      "A reply's Markdown arrives as formatting instead of as `**characters**`. WeChat reads Markdown itself and shows the most of the four channels: headings, bold, strikethrough, lists, quotes, rules, links, inline code, code blocks and tables all render. What it cannot show keeps its words and loses its markers — headings past the fourth level, italics around Chinese text, and inline images, which become links.",
+      "A reply's Markdown arrives as formatting instead of as `**characters**`. WeChat reads Markdown itself and shows the most of the five channels: headings, bold, strikethrough, lists, quotes, rules, links, inline code, code blocks and tables all render. What it cannot show keeps its words and loses its markers — headings past the fourth level, italics around Chinese text, and inline images, which become links.",
+    renderMarkdownHelpTuitui:
+      "A reply's Markdown arrives as formatting instead of as `**characters**`. Only a Tuitui channel (teams) conversation renders Markdown; direct chats and groups receive plain text, with the markup left as written.",
     /** The saved delivery option: one message per non-blank line of a reply. */
     linePerMessage: "One message per line",
     /** Its disclosure, beside the label: what the option does to a reply, and its two edges. */
@@ -2286,6 +2332,7 @@ Scenarios:
       telegram: "Telegram connection enabled",
       qq: "QQ connection enabled",
       wechat: "WeChat connection enabled",
+      tuitui: "Tuitui connection enabled",
     },
     /**
      * Delivery observability under the toggle: has anything arrived, and did the last one get

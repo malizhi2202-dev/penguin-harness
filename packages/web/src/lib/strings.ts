@@ -2149,9 +2149,50 @@ Benchmark：
   },
 
   /**
+   * Tuitui-channel strings of the messaging binding editor (channel-neutral ones live under
+   * `messaging`).
+   */
+  tuitui: {
+    /** The what-binding-does FAQ fold's body (this channel's flavor). */
+    intro:
+      "绑定后，发给推推机器人的消息会进入本对话，AI 的回复会发回推推。凭据就是 App ID 与 App Secret 两个值，直接随每次请求的 URL 发送——没有换取 token 的一步，也不会过期；事件由一条长连接 WebSocket 推送，无需公网地址，也没有扫码流程。",
+    appId: "App ID",
+    appSecret: "App Secret",
+    /** Shown while a saved secret exists: submitting an empty field keeps it. */
+    appSecretKeepHint: "留空保持已保存的 App Secret 不变",
+    /** The stored-secret row's clear checkbox (the models-page clear idiom). */
+    clearSecret: "清除已存 App Secret",
+    host: "接入地址",
+    /** Formatting, so it stays on screen under the field rather than behind a "?". */
+    hostHint: "只填主机名，例如 im.example.com——不要带 https://、路径或端口",
+    invalidHost: "接入地址需为裸主机名，不能带协议、路径或端口",
+    /** Why "send test message" is disabled before the bot has ever been messaged. */
+    testMessageNoChat: "先在推推中给机器人发一条消息，机器人才知道要发到哪个会话",
+    /**
+     * The rule that shapes group chats on this channel, stated where it is first needed:
+     * the platform pushes every group message, and only the ones addressing the robot are
+     * answered — the rest reach the user as silence.
+     */
+    groupAtOnly:
+      "群聊里只有 @ 了机器人的消息会进入对话：推推会把群里的全部消息都推过来，其余的被丢弃。",
+    /** Why no reply quotes: the platform has no reply-to field, so the anchor is the conversation. */
+    noQuote:
+      "回复只能发回消息所在的会话，不能引用某条消息——推推没有 reply-to 字段。对方引用你时，被引用的内容会作为文本随消息一起进入对话。",
+    /** The outbound kinds, and the one the platform does not distinguish. */
+    imageAsFile: "出站没有单独的图片消息类型：图片和文件一样，都以文件消息送达。",
+    /** The setup FAQ fold's steps. */
+    setupSteps: [
+      "在推推里创建一个机器人，取得它的 App ID 与 App Secret",
+      "把这两个值填入上方表单；接入地址留空即为默认的 im.example.com",
+      "保存后启用连接——连接即订阅，这一条长连接会收到机器人参与的全部会话",
+      "在推推里给机器人发一条消息；在群里则需要 @ 它",
+    ],
+  },
+
+  /**
    * Session ↔ messaging-bot binding: the dock panel, the row action + dialog, and the
    * channel-neutral editor strings (per-channel fields live under `feishu` / `telegram` /
-   * `qq`).
+   * `qq` / `wechat` / `tuitui`).
    */
   messaging: {
     panelTitle: "远程控制",
@@ -2165,6 +2206,7 @@ Benchmark：
       telegram: "Telegram",
       qq: "QQ",
       wechat: "微信",
+      tuitui: "推推",
     },
     /**
      * Shared link labels: the tutorial (in the setup FAQ fold) and, at the credential field's
@@ -2219,7 +2261,9 @@ Benchmark：
     renderMarkdownHelpQQ:
       "开启后，回复中的 Markdown 以排版形式到达，而不是显示为 `**字符**`。QQ 支持标题、粗体、斜体、删除线、列表、引用、分割线和链接；它没有代码格式，也没有表格，因此代码块按普通文本行到达，表格按其行到达。若 QQ 拒绝该排版，回复会改以纯文本发出——这会多占用 QQ 对每条消息只允许的少数几条回复中的一条。",
     renderMarkdownHelpWeChat:
-      "开启后，回复中的 Markdown 以排版形式到达，而不是显示为 `**字符**`。微信自己就读 Markdown，四个渠道里它支持得最全：标题、粗体、删除线、列表、引用、分割线、链接、行内代码、代码块和表格都能渲染。它不支持的部分会被去掉标记只留文字——五级以下的标题、中文两侧的斜体星号，以及行内图片（改为链接）。",
+      "开启后，回复中的 Markdown 以排版形式到达，而不是显示为 `**字符**`。微信自己就读 Markdown，五个渠道里它支持得最全：标题、粗体、删除线、列表、引用、分割线、链接、行内代码、代码块和表格都能渲染。它不支持的部分会被去掉标记只留文字——五级以下的标题、中文两侧的斜体星号，以及行内图片（改为链接）。",
+    renderMarkdownHelpTuitui:
+      "开启后，回复中的 Markdown 以排版形式到达，而不是显示为 `**字符**`。推推只有频道（teams）会话渲染 Markdown；单聊和群聊收到的是纯文本，标记按原样显示。",
     /** The saved delivery option: one message per non-blank line of a reply. */
     linePerMessage: "每行一条消息",
     /** Its disclosure, beside the label: what the option does to a reply, and its two edges. */
@@ -2243,6 +2287,7 @@ Benchmark：
       telegram: "Telegram 连接已启用",
       qq: "QQ 连接已启用",
       wechat: "微信连接已启用",
+      tuitui: "推推连接已启用",
     },
     /**
      * Delivery observability under the toggle: has anything arrived, and did the last one get

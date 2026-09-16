@@ -19,7 +19,9 @@
  * Telegram has code and no headings, lists or tables; Feishu has all of them; QQ has
  * headings and lists but no code and no tables; WeChat reads Markdown itself, so its
  * renderer subtracts what the client will not show rather than translating — over three
- * different markups and four different escaping rules. A printer parameterised over that
+ * different markups and four different escaping rules. (Tuitui is the reason this is four
+ * renderers and not five channels: only its team posts take Markdown at all, and the platform
+ * renders that itself, so its adapter passes the text through and needs no module here.) A printer parameterised over that
  * would be a table of capability flags whose every branch belongs to exactly one channel,
  * which is the connector's own job under a name that hides it. So each channel renders this
  * tree itself: telegram-html.ts, feishu-card.ts, qq-markdown.ts and wechat-markdown.ts, each

@@ -9,6 +9,9 @@
  * there is nothing for a domain to switch between. WeChat's has no credential at all — its
  * token comes only from a scan, which writes it server-side — so its sub-state is the
  * delivery preferences plus the clear checkbox, and its submit can never fail validation.
+ * Tuitui's mirrors QQ's plus a host field: there is no scan and no OAuth exchange, so both
+ * halves of the credential are typed here, and the host is editable because the platform
+ * may be deployed on more than one.
  *
  * Not every field is a credential: `linePerMessage` (send a reply one message per non-blank
  * line), `finalReplyOnly` (send only a run's last reply, when the run ends) and
@@ -30,14 +33,30 @@ import type {
   QQTestRequest,
   TelegramBindingPutRequest,
   TelegramTestRequest,
+  TuituiBindingPutRequest,
+  TuituiTestRequest,
   WeChatBindingPutRequest,
 } from "@prismshadow/penguin-server/api";
 
 /** Default Feishu open-platform domain (shown prefilled; Lark tenants overwrite it). */
 export const FEISHU_DEFAULT_DOMAIN = "https://open.feishu.cn";
 
+/**
+ * Default Tuitui IM host, shown prefilled — the one deployment the platform publishes. The
+ * port is the platform's own and is not a field, so this is a bare host name.
+ */
+export const TUITUI_DEFAULT_HOST = "im.example.com";
+
 /** The token shape @BotFather issues — mirrors the server's identity rule, for immediate feedback. */
 const TELEGRAM_TOKEN_RE = /^\d+:[A-Za-z0-9_-]{5,}$/;
+
+/**
+ * The Tuitui host's accepted shape, mirroring the server's rule (parseTuituiHost): a bare host
+ * name, nothing else. A scheme, a path and a `:port` are all refused rather than normalized
+ * away — the calls are built as `https://<host>:8282/robot…`, so a typed port would either be
+ * dropped or produce a second one — and the field is checked before the round trip.
+ */
+const TUITUI_HOST_RE = /^[A-Za-z0-9.-]+$/;
 
 /**
  * The delivery preferences every channel carries — the saved fields that are not credentials,
@@ -81,6 +100,23 @@ export interface WeChatFormFields extends MessagingDeliveryFields {
   clearToken: boolean;
 }
 
+/**
+ * Tuitui's editable state: Feishu's shape minus the URL, plus the IM host.
+ *
+ * Both halves of the credential are typed here — this channel has no scan and no token
+ * exchange to obtain one any other way — and the host travels with them because the
+ * platform may be deployed on more than one host.
+ */
+export interface TuituiFormFields extends MessagingDeliveryFields {
+  appId: string;
+  /** Always starts empty; a non-empty value replaces the stored secret on save. */
+  appSecret: string;
+  /** Where the platform is reached; blank falls back to the default host on save. */
+  host: string;
+  /** The stored-secret clear checkbox (models idiom): applied on save, a typed secret wins over it. */
+  clearSecret: boolean;
+}
+
 export interface TelegramFormFields extends MessagingDeliveryFields {
   /** Always starts empty; a non-empty value replaces the stored token on save. */
   botToken: string;
@@ -95,11 +131,12 @@ export interface MessagingFormState {
   telegram: TelegramFormFields;
   qq: QQFormFields;
   wechat: WeChatFormFields;
+  tuitui: TuituiFormFields;
 }
 
-export type MessagingFormField = "appId" | "appSecret" | "baseDomain" | "botToken";
+export type MessagingFormField = "appId" | "appSecret" | "baseDomain" | "botToken" | "host";
 
-export type MessagingFormErrorCode = "required" | "url_invalid" | "token_invalid";
+export type MessagingFormErrorCode = "required" | "url_invalid" | "token_invalid" | "host_invalid";
 
 export type MessagingFormErrors = Partial<Record<MessagingFormField, MessagingFormErrorCode>>;
 
@@ -109,6 +146,7 @@ export type MessagingFormResult =
   | { ok: true; channel: "telegram"; body: TelegramBindingPutRequest }
   | { ok: true; channel: "qq"; body: QQBindingPutRequest }
   | { ok: true; channel: "wechat"; body: WeChatBindingPutRequest }
+  | { ok: true; channel: "tuitui"; body: TuituiBindingPutRequest }
   | { ok: false; errors: MessagingFormErrors };
 
 export type MessagingTestRequestByChannel =
@@ -116,7 +154,8 @@ export type MessagingTestRequestByChannel =
   | { channel: "telegram"; body: TelegramTestRequest }
   | { channel: "qq"; body: QQTestRequest }
   /** WeChat's probe carries no body: nothing on its form is a credential to send. */
-  | { channel: "wechat" };
+  | { channel: "wechat" }
+  | { channel: "tuitui"; body: TuituiTestRequest };
 
 export function emptyMessagingForm(channel: MessagingChannel = "feishu"): MessagingFormState {
   return {
@@ -149,6 +188,17 @@ export function emptyMessagingForm(channel: MessagingChannel = "feishu"): Messag
     },
     wechat: {
       clearToken: false,
+      linePerMessage: false,
+      finalReplyOnly: false,
+      renderMarkdown: true,
+    },
+    // The host is prefilled, like Feishu's domain: it is a value to overwrite when the
+    // platform lives elsewhere, not one to know in advance.
+    tuitui: {
+      appId: "",
+      appSecret: "",
+      host: TUITUI_DEFAULT_HOST,
+      clearSecret: false,
       linePerMessage: false,
       finalReplyOnly: false,
       renderMarkdown: true,
@@ -194,6 +244,16 @@ export function bindingsToForm(bindings: MessagingBindingInfo[]): MessagingFormS
         finalReplyOnly: info.finalReplyOnly,
         renderMarkdown: info.renderMarkdown,
       };
+    } else if (info.channel === "tuitui") {
+      form.tuitui = {
+        appId: info.appId,
+        appSecret: "",
+        host: info.host,
+        clearSecret: false,
+        linePerMessage: info.linePerMessage,
+        finalReplyOnly: info.finalReplyOnly,
+        renderMarkdown: info.renderMarkdown,
+      };
     } else {
       // Telegram's only credential field is the secret itself, so its sub-state loads empty
       // apart from the delivery preferences, which are not credentials.
@@ -222,9 +282,9 @@ function isHttpUrl(raw: string): boolean {
 /**
  * Validates the selected channel's fields and builds its PUT body. `hasStoredSecret`
  * relaxes the secret requirement: with a saved binding an empty field means "keep it",
- * on a first bind it is an error. A blank Feishu domain falls back to the default rather
- * than erroring — the field is prefilled, and clearing it is a "give me the default"
- * gesture.
+ * on a first bind it is an error. A blank Feishu domain (or Tuitui host) falls back to the
+ * default rather than erroring — the field is prefilled, and clearing it is a "give me the
+ * default" gesture.
  */
 export function formToPut(form: MessagingFormState, hasStoredSecret: boolean): MessagingFormResult {
   const errors: MessagingFormErrors = {};
@@ -286,6 +346,32 @@ export function formToPut(form: MessagingFormState, hasStoredSecret: boolean): M
       },
     };
   }
+  if (form.channel === "tuitui") {
+    const appId = form.tuitui.appId.trim();
+    if (appId === "") errors.appId = "required";
+    const appSecret = form.tuitui.appSecret.trim();
+    const clearing = appSecret === "" && form.tuitui.clearSecret && hasStoredSecret;
+    if (appSecret === "" && !hasStoredSecret) errors.appSecret = "required";
+    // A blank host means "the platform's own", like a blank Feishu domain means the default:
+    // the field is prefilled, and clearing it is not an error but a gesture.
+    const host = form.tuitui.host.trim() || TUITUI_DEFAULT_HOST;
+    if (!TUITUI_HOST_RE.test(host)) errors.host = "host_invalid";
+    if (Object.keys(errors).length > 0) return { ok: false, errors };
+    return {
+      ok: true,
+      channel: "tuitui",
+      body: {
+        appId,
+        ...(appSecret !== "" ? { appSecret } : {}),
+        ...(clearing ? { clearAppSecret: true } : {}),
+        host,
+        // Always sent, for the same reason as the other channels': an omitted flag means "keep".
+        linePerMessage: form.tuitui.linePerMessage,
+        finalReplyOnly: form.tuitui.finalReplyOnly,
+        renderMarkdown: form.tuitui.renderMarkdown,
+      },
+    };
+  }
   const appId = form.feishu.appId.trim();
   if (appId === "") errors.appId = "required";
   const appSecret = form.feishu.appSecret.trim();
@@ -330,6 +416,19 @@ export function formToTest(form: MessagingFormState): MessagingTestRequestByChan
       body: {
         ...(appId !== "" ? { appId } : {}),
         ...(appSecret !== "" ? { appSecret } : {}),
+      },
+    };
+  }
+  if (form.channel === "tuitui") {
+    const appId = form.tuitui.appId.trim();
+    const appSecret = form.tuitui.appSecret.trim();
+    const host = form.tuitui.host.trim();
+    return {
+      channel: "tuitui",
+      body: {
+        ...(appId !== "" ? { appId } : {}),
+        ...(appSecret !== "" ? { appSecret } : {}),
+        ...(host !== "" ? { host } : {}),
       },
     };
   }
@@ -380,6 +479,17 @@ export function formDirty(form: MessagingFormState, baseline: MessagingFormState
       form.qq.renderMarkdown !== baseline.qq.renderMarkdown
     );
   }
+  if (form.channel === "tuitui") {
+    return (
+      form.tuitui.appId !== baseline.tuitui.appId ||
+      form.tuitui.host !== baseline.tuitui.host ||
+      form.tuitui.appSecret.trim() !== "" ||
+      form.tuitui.clearSecret ||
+      form.tuitui.linePerMessage !== baseline.tuitui.linePerMessage ||
+      form.tuitui.finalReplyOnly !== baseline.tuitui.finalReplyOnly ||
+      form.tuitui.renderMarkdown !== baseline.tuitui.renderMarkdown
+    );
+  }
   return (
     form.feishu.appId !== baseline.feishu.appId ||
     form.feishu.baseDomain !== baseline.feishu.baseDomain ||
@@ -404,6 +514,12 @@ export function formTestable(form: MessagingFormState, secretConfigured: boolean
   if (form.channel === "wechat") return secretConfigured;
   if (form.channel === "qq") {
     return (form.qq.appId.trim() !== "" && form.qq.appSecret.trim() !== "") || secretConfigured;
+  }
+  if (form.channel === "tuitui") {
+    // Both halves are the credential, like QQ's and Feishu's: an App ID alone signs in nowhere.
+    return (
+      (form.tuitui.appId.trim() !== "" && form.tuitui.appSecret.trim() !== "") || secretConfigured
+    );
   }
   return (
     (form.feishu.appId.trim() !== "" && form.feishu.appSecret.trim() !== "") || secretConfigured

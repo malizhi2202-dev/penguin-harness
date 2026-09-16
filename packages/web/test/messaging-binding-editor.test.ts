@@ -48,6 +48,7 @@ function credentialAnchor(channel: MessagingChannel): string {
   if (channel === "telegram") return S.telegram.botToken;
   if (channel === "qq") return S.qq.appId;
   if (channel === "wechat") return S.wechat.scanStart;
+  if (channel === "tuitui") return S.tuitui.appId;
   return S.feishu.appId;
 }
 
@@ -63,7 +64,7 @@ function stateOf(
     form: emptyMessagingForm(channel),
     patchForm: () => {},
     selectChannel: () => {},
-    channels: { feishu: DARK, telegram: DARK, qq: DARK, wechat: DARK, ...facts },
+    channels: { feishu: DARK, telegram: DARK, qq: DARK, wechat: DARK, tuitui: DARK, ...facts },
     fieldErrors: {},
     dirty: false,
     busy: false,
@@ -190,7 +191,7 @@ describe("MessagingBindingBody", () => {
   });
 
   it('closes the form with the delivery options, each explanation behind its label\'s "?"', () => {
-    for (const channel of ["feishu", "telegram", "qq", "wechat"] as MessagingChannel[]) {
+    for (const channel of ["feishu", "telegram", "qq", "wechat", "tuitui"] as MessagingChannel[]) {
       const html = render(stateOf(channel));
       // Every channel carries both: they are delivery preferences, not credentials.
       expect(html).toContain(S.messaging.linePerMessage);
@@ -238,8 +239,9 @@ describe("MessagingBindingBody", () => {
       telegram: S.messaging.renderMarkdownHelpTelegram,
       qq: S.messaging.renderMarkdownHelpQQ,
       wechat: S.messaging.renderMarkdownHelpWeChat,
+      tuitui: S.messaging.renderMarkdownHelpTuitui,
     } as const;
-    for (const channel of ["feishu", "telegram", "qq", "wechat"] as MessagingChannel[]) {
+    for (const channel of ["feishu", "telegram", "qq", "wechat", "tuitui"] as MessagingChannel[]) {
       const html = render(stateOf(channel));
       expect(html).toContain(S.messaging.renderMarkdown);
       // Semantics disclose — the sentence is in the popover panel, which renders collapsed.
@@ -247,7 +249,7 @@ describe("MessagingBindingBody", () => {
       expect(html).not.toContain(help[channel]);
       // One sentence per channel: what a channel can show is the whole of what the reader
       // needs here, and a shared line would have to say "depending on the channel".
-      for (const other of ["feishu", "telegram", "qq", "wechat"] as MessagingChannel[]) {
+      for (const other of ["feishu", "telegram", "qq", "wechat", "tuitui"] as MessagingChannel[]) {
         if (other !== channel) expect(html).not.toContain(help[other]);
       }
       // After the credential fields, like the other delivery preference.
@@ -269,19 +271,41 @@ describe("MessagingBindingBody", () => {
     expect(render(stateOf("feishu"))).not.toContain(S.qq.repliesOnly);
   });
 
-  it("offers all four channels in the selector", () => {
+  it("states Tuitui's group rule on screen, and gives it a host field with no console link", () => {
+    const html = render(stateOf("tuitui"));
+    // The same class of standing line as QQ's and WeChat's: the platform pushes every group
+    // message and answers only the ones addressing the robot, so a user in a group sees
+    // silence and blames the binding.
+    expect(html).toContain(S.tuitui.groupAtOnly);
+    // Under the credential fields, so the controls above hold one height across channels.
+    expect(html.indexOf(S.tuitui.groupAtOnly)).toBeGreaterThan(html.indexOf(S.tuitui.appSecret));
+    // Both halves of the credential are typed, and the host is a field of its own — its rule
+    // is formatting, so it stays on screen under the input rather than behind a "?".
+    expect(html).toContain(S.tuitui.appId);
+    expect(html).toContain(S.tuitui.host);
+    expect(html).toContain(S.tuitui.hostHint);
+    // No credential-source corner link: no public console page is known for this channel, so
+    // the shared console label must not appear promising one.
+    expect(html).not.toContain(S.messaging.console);
+    // ...and no other channel's standing line leaked into this one.
+    expect(html).not.toContain(S.qq.repliesOnly);
+    expect(html).not.toContain(S.wechat.directOnly);
+  });
+
+  it("offers all five channels in the selector", () => {
     const html = render(stateOf("qq"));
     for (const name of [
       S.messaging.channelName.feishu,
       S.messaging.channelName.telegram,
       S.messaging.channelName.qq,
       S.messaging.channelName.wechat,
+      S.messaging.channelName.tuitui,
     ]) {
       expect(html).toContain(`>${name}</button>`);
     }
     // The grid's column count is spelled out in the component rather than interpolated, so
-    // a fourth channel that did not widen it would silently wrap onto a second row.
-    expect(html).toContain("grid-cols-4");
+    // a fifth channel that did not widen it would silently wrap onto a second row.
+    expect(html).toContain("grid-cols-5");
   });
 
   it("says whether anything has arrived, and which end failed when something did", () => {

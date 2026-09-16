@@ -3,8 +3,8 @@
  * editor's and the Messaging dock panel's shared surface. A Session keeps at most one
  * saved config PER channel (all of them may sit saved side by side); the channel-agnostic
  * GET returns them all, and each channel owns a subtree with its own config shape —
- * /feishu, /telegram, /qq and /wechat carry the same verb set, and a further channel adds
- * its own.
+ * /feishu, /telegram, /qq, /wechat and /tuitui carry the same verb set, and a further channel
+ * adds its own.
  *
  * ENABLING the connection IS the binding, and disabling it is the unbind. Saving
  * credentials therefore never conflicts across Sessions — any number of Sessions may keep
@@ -39,7 +39,8 @@
  * the stored value — and none touches the connection.
  *
  * Round-trip rule for secrets: GET only ever returns the masked value, and a PUT whose
- * secret (feishu `appSecret`, telegram `botToken`, qq `appSecret`) is omitted or blank keeps the stored
+ * secret (feishu `appSecret`, telegram `botToken`, qq `appSecret`, tuitui `appSecret`) is omitted
+ * or blank keeps the stored
  * one (the same never-round-trip-masked-keys convention as the models test endpoint), so
  * the plaintext exists only at first entry. Dropping a stored secret is the explicit
  * clear flag (the models-page idiom), refused while the binding is enabled — the cleared
@@ -65,6 +66,9 @@ import type {
   TelegramBindingInfo,
   TelegramBindingResponse,
   TelegramTestResponse,
+  TuituiBindingInfo,
+  TuituiBindingResponse,
+  TuituiTestResponse,
   WeChatBindingInfo,
   WeChatBindingResponse,
   WeChatScanPollResponse,
@@ -75,6 +79,7 @@ import type { AppEnv } from "../../auth/middleware.js";
 import type { MessagingBindingRow } from "../../db/repos/messaging-bindings.js";
 import type { SessionRow } from "../../db/repos/sessions.js";
 import { FEISHU_DEFAULT_DOMAIN, feishuConfigOf } from "../../runtime/messaging/feishu-connector.js";
+import { TUITUI_DEFAULT_HOST } from "../../runtime/messaging/tuitui-connector.js";
 import { telegramBotIdOf } from "../../runtime/messaging/telegram-connector.js";
 import { maskApiKey } from "../../services/project-config-service.js";
 import { HttpError } from "../errors.js";
@@ -125,6 +130,25 @@ function qqFieldsOf(row: MessagingBindingRow): { appId: string; appSecret: strin
 }
 
 /**
+ * The stored tuitui config, tolerated loosely (a malformed document reads as blanks).
+ *
+ * `host` falls back rather than reading as blank: a document saved before the field existed,
+ * or by hand without it, still points at the one host the platform publishes.
+ */
+function tuituiFieldsOf(row: MessagingBindingRow): {
+  appId: string;
+  appSecret: string;
+  host: string;
+} {
+  const { appId, appSecret, host } = row.config;
+  return {
+    appId: typeof appId === "string" ? appId : row.accountId,
+    appSecret: typeof appSecret === "string" ? appSecret : "",
+    host: typeof host === "string" && host !== "" ? host : TUITUI_DEFAULT_HOST,
+  };
+}
+
+/**
  * The stored wechat config, tolerated loosely (a malformed document reads as blanks).
  *
  * `baseUrl` and `userId` are not projected anywhere: the first is an infrastructure detail a
@@ -140,7 +164,7 @@ function wechatFieldsOf(row: MessagingBindingRow): { botId: string; botToken: st
 }
 
 /**
- * The four channels, each saying only what it does not share (see messaging-channels.ts).
+ * The five channels, each saying only what it does not share (see messaging-channels.ts).
  * Everything written against this table — the read, the state toggle, the delete, the test
  * message, the enable gate's credential check — is written once.
  *
@@ -211,7 +235,41 @@ const CHANNEL_SPECS: Readonly<Record<MessagingChannel, MessagingChannelSpec>> = 
       };
     },
   },
+  tuitui: {
+    channel: "tuitui",
+    label: "Tuitui",
+    storedSecret: (row) => tuituiFieldsOf(row).appSecret,
+    secretRequiredCode: "tuitui_secret_required",
+    toInfo: (row) => {
+      const fields = tuituiFieldsOf(row);
+      return {
+        channel: "tuitui",
+        ...commonBindingFields(row),
+        appId: fields.appId,
+        ...maskedSecretField("appSecretMasked", fields.appSecret),
+        host: fields.host,
+      };
+    },
+  },
 };
+
+/**
+ * Normalizes a Tuitui host input: blank → the platform's own host; anything else must be a
+ * bare host name.
+ *
+ * A scheme, a path or a `:port` is refused rather than normalized away, because all three
+ * would be silently wrong in the URL this is pasted into: the calls are built as
+ * `https://<host>:8282/robot…`, so a port typed here would either be dropped or produce a
+ * second one. The platform's port is not a per-installation choice.
+ */
+function parseTuituiHost(raw: string | undefined): string {
+  const trimmed = raw?.trim() ?? "";
+  if (trimmed === "") return TUITUI_DEFAULT_HOST;
+  if (!/^[A-Za-z0-9.-]+$/.test(trimmed)) {
+    throw badRequest("host must be a host name such as im.example.com (no scheme, path or port).");
+  }
+  return trimmed;
+}
 
 /** The spec for a stored row's channel, or null on an unknown discriminator (skipped defensively, like the bridge does). */
 function specOf(channel: string): MessagingChannelSpec | null {
@@ -284,6 +342,9 @@ export function sessionMessagingRoutes(deps: AppDeps): Hono<AppEnv> {
     bindingResponse(sessionId, CHANNEL_SPECS.feishu) as FeishuBindingResponse;
   const telegramResponse = (sessionId: string): TelegramBindingResponse =>
     bindingResponse(sessionId, CHANNEL_SPECS.telegram) as TelegramBindingResponse;
+  const tuituiResponse = (sessionId: string): TuituiBindingResponse =>
+    bindingResponse(sessionId, CHANNEL_SPECS.tuitui) as TuituiBindingResponse;
+
   const qqResponse = (sessionId: string): QQBindingResponse =>
     bindingResponse(sessionId, CHANNEL_SPECS.qq) as QQBindingResponse;
   const wechatResponse = (sessionId: string): WeChatBindingResponse =>
@@ -903,6 +964,69 @@ export function sessionMessagingRoutes(deps: AppDeps): Hono<AppEnv> {
       ...(result.latencyMs !== undefined ? { latencyMs: result.latencyMs } : {}),
       ...(result.error !== undefined ? { error: result.error } : {}),
     } satisfies WeChatTestResponse);
+  });
+
+  /**
+   * Save the credential pair and the host. Same contract as the Feishu PUT: credentials
+   * only, never the connection toggle, and an ENABLED binding's connector restarts with
+   * what was saved. The App ID is the account identity, so re-pointing an enabled binding
+   * at another robot asks the same exclusivity question the enable gate asks.
+   */
+  app.put("/:sessionId/messaging/tuitui", async (c) => {
+    const row = resolveSession(c);
+    deps.projectService.requireProjectOwner(c.var.user.userId, row.projectId);
+    const body = await readJson(c);
+    const appId = requireString(body, "appId", { minLen: 1, maxLen: 200 }).trim();
+    if (appId === "") throw badRequest("appId must not be blank.");
+    const host = parseTuituiHost(optionalString(body, "host", { maxLen: 200 }));
+    const existing = deps.messagingRepo.find(row.sessionId, "tuitui");
+    const { secret: appSecret } = resolveSecret({
+      typed: optionalString(body, "appSecret", { maxLen: 500 })?.trim(),
+      clear: (body as { clearAppSecret?: unknown }).clearAppSecret === true,
+      existing,
+      stored: existing !== null ? tuituiFieldsOf(existing).appSecret : "",
+      requiredCode: "tuitui_secret_required",
+      requiredMessage: "appSecret is required to bind.",
+    });
+    if (existing !== null && existing.enabled) guardAccountFree(row.sessionId, "tuitui", appId);
+    const saved = deps.messagingRepo.upsert({
+      sessionId: row.sessionId,
+      channel: "tuitui",
+      accountId: appId,
+      config: { appId, appSecret, host },
+      ...deliveryPatchOf(body),
+    });
+    if (saved.enabled) await deps.messaging.sync(row.sessionId);
+    return c.json(tuituiResponse(row.sessionId));
+  });
+
+  // Credential test with the request's draft values, each falling back to the stored
+  // binding. The probe is the event socket's handshake, which is the whole of what these
+  // credentials are used for and which sends nothing.
+  app.post("/:sessionId/messaging/tuitui/test", async (c) => {
+    const row = resolveSession(c);
+    const body = await readJson(c);
+    const stored = deps.messagingRepo.find(row.sessionId, "tuitui");
+    const storedFields = stored !== null ? tuituiFieldsOf(stored) : null;
+    const appId = optionalString(body, "appId", { maxLen: 200 })?.trim() || storedFields?.appId;
+    const appSecret =
+      optionalString(body, "appSecret", { maxLen: 500 })?.trim() || storedFields?.appSecret;
+    const rawHost = optionalString(body, "host", { maxLen: 200 })?.trim();
+    const host = parseTuituiHost(
+      rawHost !== undefined && rawHost !== "" ? rawHost : storedFields?.host,
+    );
+    if (appId === undefined || appId === "") {
+      throw badRequest("appId is required (no stored binding to fall back to).");
+    }
+    if (appSecret === undefined || appSecret === "") {
+      throw new HttpError(400, "tuitui_secret_required", "appSecret is required to test.");
+    }
+    const result = await deps.messaging.testCredentials("tuitui", { appId, appSecret, host });
+    return c.json({
+      ok: result.ok,
+      ...(result.latencyMs !== undefined ? { latencyMs: result.latencyMs } : {}),
+      ...(result.error !== undefined ? { error: result.error } : {}),
+    } satisfies TuituiTestResponse);
   });
 
   return app;

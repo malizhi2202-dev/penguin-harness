@@ -65,6 +65,7 @@ import { toastError, toastInfo, toastSuccess } from "../../components/ui/toast";
 import { QQScanConnect } from "./qq-scan-connect";
 import { WeChatScanConnect } from "./wechat-scan-connect";
 import {
+  TUITUI_DEFAULT_HOST,
   bindingsToForm,
   emptyMessagingForm,
   formDirty,
@@ -87,7 +88,9 @@ const STATUS_POLL_MS = 3000;
  *
  * A channel may have NEITHER, which is why the entry is nullable: WeChat's bot is authorized
  * by a scan and has no public console and no walkthrough to point at, and inventing a URL
- * would send a reader to a page that does not answer them.
+ * would send a reader to a page that does not answer them. Tuitui is the second such channel:
+ * its credential pair is typed in from wherever the robot was created, and no public
+ * walkthrough or console page is known to exist, so pointing anywhere would be a guess.
  */
 const CHANNEL_LINKS = {
   feishu: {
@@ -120,6 +123,7 @@ const CHANNEL_LINKS = {
     credentialSource: "https://q.qq.com/qqbot/dashboard/",
   },
   wechat: null,
+  tuitui: null,
 } as const satisfies Record<
   MessagingChannel,
   { tutorial: string; credentialSource: string } | null
@@ -136,6 +140,9 @@ function errorText(code: MessagingFormErrors[keyof MessagingFormErrors]): string
   if (code === undefined) return undefined;
   if (code === "required") return S.common.requiredField;
   if (code === "token_invalid") return S.telegram.invalidToken;
+  // Not the Feishu domain's sentence: the two fields disagree on what a valid value looks
+  // like (this one takes no scheme), so the message belongs to the field that raised it.
+  if (code === "host_invalid") return S.tuitui.invalidHost;
   return S.feishu.invalidDomain;
 }
 
@@ -187,6 +194,7 @@ function factsFromList(res: MessagingBindingsResponse): ChannelFactsMap {
     telegram: EMPTY_FACTS,
     qq: EMPTY_FACTS,
     wechat: EMPTY_FACTS,
+    tuitui: EMPTY_FACTS,
   };
   for (const entry of res.bindings) {
     map[entry.binding.channel] = factsOf(entry.binding, entry.status);
@@ -287,6 +295,7 @@ export function useMessagingBinding(
     telegram: EMPTY_FACTS,
     qq: EMPTY_FACTS,
     wechat: EMPTY_FACTS,
+    tuitui: EMPTY_FACTS,
   });
   const [fieldErrors, setFieldErrors] = useState<MessagingFormErrors>({});
   const [busy, setBusy] = useState(false);
@@ -363,7 +372,9 @@ export function useMessagingBinding(
         ? "qq"
         : channels.wechat.enabled
           ? "wechat"
-          : null;
+          : channels.tuitui.enabled
+            ? "tuitui"
+            : null;
   const otherEnabled = enabledChannel !== null && enabledChannel !== selected;
   const dirty = form !== null && baseline !== null && formDirty(form, baseline);
 
@@ -383,7 +394,9 @@ export function useMessagingBinding(
             ? { qq: fresh.qq }
             : channel === "wechat"
               ? { wechat: fresh.wechat }
-              : { telegram: fresh.telegram };
+              : channel === "tuitui"
+                ? { tuitui: fresh.tuitui }
+                : { telegram: fresh.telegram };
       setForm((prev) => (prev ? { ...prev, ...sub } : prev));
       setBaseline((prev) => (prev ? { ...prev, ...sub } : prev));
     }
@@ -408,6 +421,10 @@ export function useMessagingBinding(
       } else if (draft.channel === "wechat") {
         // No body: this channel's probe reads the stored binding, there being no draft.
         const res = await api.testWeChatBinding(sessionId);
+        if (res.ok) toastSuccess(S.messaging.testOk(res.latencyMs ?? 0));
+        else toastError(S.messaging.testFail(res.error ?? S.common.unknownError));
+      } else if (draft.channel === "tuitui") {
+        const res = await api.testTuituiBinding(sessionId, draft.body);
         if (res.ok) toastSuccess(S.messaging.testOk(res.latencyMs ?? 0));
         else toastError(S.messaging.testFail(res.error ?? S.common.unknownError));
       } else {
@@ -451,7 +468,9 @@ export function useMessagingBinding(
             ? await api.putQQBinding(sessionId, built.body)
             : built.channel === "wechat"
               ? await api.putWeChatBinding(sessionId, built.body)
-              : await api.putFeishuBinding(sessionId, built.body);
+              : built.channel === "tuitui"
+                ? await api.putTuituiBinding(sessionId, built.body)
+                : await api.putFeishuBinding(sessionId, built.body);
       applyChannel(built.channel, res.binding, res.status);
       toastSuccess(S.common.saved);
     } catch (e) {
@@ -659,7 +678,9 @@ export function MessagingBindingBody({ b }: { b: MessagingBindingEditorState }) 
         ? form.qq
         : channel === "wechat"
           ? form.wechat
-          : form.feishu;
+          : channel === "tuitui"
+            ? form.tuitui
+            : form.feishu;
   const patchDelivery = (patch: Partial<MessagingDeliveryFields>) =>
     b.patchForm(
       channel === "telegram"
@@ -668,7 +689,9 @@ export function MessagingBindingBody({ b }: { b: MessagingBindingEditorState }) 
           ? { qq: { ...form.qq, ...patch } }
           : channel === "wechat"
             ? { wechat: { ...form.wechat, ...patch } }
-            : { feishu: { ...form.feishu, ...patch } },
+            : channel === "tuitui"
+              ? { tuitui: { ...form.tuitui, ...patch } }
+              : { feishu: { ...form.feishu, ...patch } },
     );
   return (
     <div className="space-y-3">
@@ -676,12 +699,13 @@ export function MessagingBindingBody({ b }: { b: MessagingBindingEditorState }) 
           switches forms rather than locking (the mcp transport idiom). */}
       <div role="group" aria-label={S.messaging.channelLabel}>
         <Segmented
-          cols={4}
+          cols={5}
           options={[
             { value: "feishu" as MessagingChannel, label: S.messaging.channelName.feishu },
             { value: "telegram" as MessagingChannel, label: S.messaging.channelName.telegram },
             { value: "qq" as MessagingChannel, label: S.messaging.channelName.qq },
             { value: "wechat" as MessagingChannel, label: S.messaging.channelName.wechat },
+            { value: "tuitui" as MessagingChannel, label: S.messaging.channelName.tuitui },
           ]}
           value={channel}
           onChange={(v) => b.selectChannel(v)}
@@ -809,7 +833,9 @@ export function MessagingBindingBody({ b }: { b: MessagingBindingEditorState }) 
                       ? S.qq.testMessageNoChat
                       : channel === "wechat"
                         ? S.wechat.testMessageNoChat
-                        : S.feishu.testMessageNoChat,
+                        : channel === "tuitui"
+                          ? S.tuitui.testMessageNoChat
+                          : S.feishu.testMessageNoChat,
               }
             : {})}
           onClick={() => void b.sendTestMessage()}
@@ -952,6 +978,67 @@ export function MessagingBindingBody({ b }: { b: MessagingBindingEditorState }) 
               arrive and concludes the binding is broken. */}
           <p className="text-xs text-gray-500 dark:text-gray-400">{S.wechat.directOnly}</p>
         </>
+      ) : channel === "tuitui" ? (
+        <>
+          {/* Both halves of the credential, typed in: this channel has no scan and no token
+              exchange, so there is nowhere else for them to come from. No corner link
+              either — no public page for the robot's credentials is known (CHANNEL_LINKS
+              carries null for this channel), and a guessed URL is worse than none. */}
+          <Input
+            size="sm"
+            label={S.tuitui.appId}
+            required
+            error={errorText(b.fieldErrors.appId)}
+            value={form.tuitui.appId}
+            onChange={(e) => b.patchForm({ tuitui: { ...form.tuitui, appId: e.target.value } })}
+            className="font-mono"
+            autoComplete="off"
+          />
+          <PasswordInput
+            size="sm"
+            label={S.tuitui.appSecret}
+            {...(facts.secretConfigured
+              ? { placeholder: S.tuitui.appSecretKeepHint }
+              : { required: true })}
+            error={errorText(b.fieldErrors.appSecret)}
+            value={form.tuitui.appSecret}
+            onChange={(e) =>
+              b.patchForm({
+                tuitui: { ...form.tuitui, appSecret: e.target.value, clearSecret: false },
+              })
+            }
+            autoComplete="off"
+          />
+          {facts.secretMasked !== null && form.tuitui.appSecret === "" && (
+            <StoredSecretRow
+              masked={facts.secretMasked}
+              clearLabel={S.tuitui.clearSecret}
+              checked={form.tuitui.clearSecret}
+              enabled={facts.enabled}
+              onChange={(checked) =>
+                b.patchForm({ tuitui: { ...form.tuitui, clearSecret: checked } })
+              }
+            />
+          )}
+          {/* The host goes last, under both halves of the credential: it is the field a user
+              changes least, and blanking it means the platform's own default rather than an
+              error. Its rule is formatting, so it stays visible under the field. */}
+          <Input
+            size="sm"
+            label={S.tuitui.host}
+            hint={S.tuitui.hostHint}
+            error={errorText(b.fieldErrors.host)}
+            value={form.tuitui.host}
+            onChange={(e) => b.patchForm({ tuitui: { ...form.tuitui, host: e.target.value } })}
+            className="font-mono"
+            placeholder={TUITUI_DEFAULT_HOST}
+            autoComplete="off"
+          />
+          {/* This channel's rule that cannot wait for a collapsed fold: the platform pushes
+              every group message and only the addressed ones are answered, so a user who
+              binds it and then writes in a group sees silence and concludes it is broken. */}
+          <p className="text-xs text-gray-500 dark:text-gray-400">{S.tuitui.groupAtOnly}</p>
+        </>
       ) : (
         <>
           <CornerLinkedField
@@ -1062,7 +1149,9 @@ export function MessagingBindingBody({ b }: { b: MessagingBindingEditorState }) 
               ? S.messaging.renderMarkdownHelpQQ
               : channel === "wechat"
                 ? S.messaging.renderMarkdownHelpWeChat
-                : S.messaging.renderMarkdownHelpFeishu
+                : channel === "tuitui"
+                  ? S.messaging.renderMarkdownHelpTuitui
+                  : S.messaging.renderMarkdownHelpFeishu
         }
         checked={delivery.renderMarkdown}
         onChange={(v) => patchDelivery({ renderMarkdown: v })}
@@ -1085,7 +1174,9 @@ export function MessagingBindingHelp({ channel }: { channel: MessagingChannel })
         ? S.qq
         : channel === "wechat"
           ? S.wechat
-          : S.feishu;
+          : channel === "tuitui"
+            ? S.tuitui
+            : S.feishu;
   const links = CHANNEL_LINKS[channel];
   return (
     <div className="space-y-2 border-t border-gray-200 pt-3 dark:border-gray-800">
@@ -1119,6 +1210,11 @@ export function MessagingBindingHelp({ channel }: { channel: MessagingChannel })
         {/* What actually travels on this channel, which is more than on any other here and
             is the question its users ask first. */}
         {channel === "wechat" && <p className="mt-1.5">{S.wechat.media}</p>}
+        {/* Tuitui's two answers of the same kind: what an outbound reply can and cannot be
+            (no quoting), and what an image becomes on the way out. Both are about the shape
+            of what travels, which is this fold's subject. */}
+        {channel === "tuitui" && <p className="mt-1.5">{S.tuitui.noQuote}</p>}
+        {channel === "tuitui" && <p className="mt-1.5">{S.tuitui.imageAsFile}</p>}
         <p className="mt-1.5">{S.messaging.faqWhatBinding}</p>
       </HelpFold>
       <HelpFold title={S.messaging.faqTroubleTitle}>

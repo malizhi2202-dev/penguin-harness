@@ -94,6 +94,9 @@ import { WeChatConnector } from "./runtime/messaging/wechat-connector.js";
 import { createWeChatTransport } from "./runtime/messaging/wechat-api.js";
 import type { WeChatTransport } from "./runtime/messaging/wechat-api.js";
 import { WeChatScanService, createWeChatScanTransport } from "./runtime/messaging/wechat-scan.js";
+import { TuituiConnector } from "./runtime/messaging/tuitui-connector.js";
+import { createTuituiTransport } from "./runtime/messaging/tuitui-api.js";
+import type { TuituiTransport } from "./runtime/messaging/tuitui-api.js";
 import type { WeChatScanTransport } from "./runtime/messaging/wechat-scan.js";
 import type { QQScanTransport } from "./runtime/messaging/qq-scan.js";
 import { TitleGenerator, TitleNotifier } from "./runtime/title-generator.js";
@@ -273,6 +276,8 @@ export interface BuildDepsOverrides {
   wechatRetryDelayMs?: (failures: number) => number;
   /** Test double: the WeChat scan-to-connect transport (avoids real ilinkai.weixin.qq.com requests). */
   wechatScanTransport?: WeChatScanTransport;
+  /** Test double: the Tuitui connector's event socket + HTTP transport (avoids real 推推 network). */
+  tuituiTransport?: TuituiTransport;
   /** Test double: machines service whose ssh effects are faked (the real one reads ~/.ssh/config and spawns ssh). */
   machines?: MachinesService;
   /**
@@ -1046,6 +1051,7 @@ export function buildAppDeps(
         overrides.wechatTransport ?? createWeChatTransport(),
         overrides.wechatRetryDelayMs ? { retryDelayMs: overrides.wechatRetryDelayMs } : {},
       ),
+      new TuituiConnector(overrides.tuituiTransport ?? createTuituiTransport()),
     ],
     errors,
     log,
@@ -1088,7 +1094,8 @@ export function buildAppDeps(
         (enabled.channel === "feishu" ||
           enabled.channel === "telegram" ||
           enabled.channel === "qq" ||
-          enabled.channel === "wechat")
+          enabled.channel === "wechat" ||
+          enabled.channel === "tuitui")
         ? enabled.channel
         : null;
     },

@@ -31,11 +31,11 @@ import type { DatabaseSync } from "node:sqlite";
 
 export interface MessagingBindingRow {
   sessionId: string;
-  /** Messaging channel discriminator (`feishu` | `telegram` | `qq` | `wechat`). */
+  /** Messaging channel discriminator (`feishu` | `telegram` | `qq` | `wechat` | `tuitui`). */
   channel: string;
-  /** Channel-scoped bot/app identity (feishu: the app_id; telegram: the bot token's numeric id; qq: the App ID; wechat: the scanned bot id); never secret. */
+  /** Channel-scoped bot/app identity (feishu: the app_id; telegram: the bot token's numeric id; qq: the App ID; wechat: the scanned bot id; tuitui: the App ID); never secret. */
   accountId: string;
-  /** Channel-specific config document (feishu: appId/appSecret/baseDomain; telegram: botToken; qq: appId/appSecret; wechat: botId/botToken/baseUrl/userId). */
+  /** Channel-specific config document (feishu: appId/appSecret/baseDomain; telegram: botToken; qq: appId/appSecret; wechat: botId/botToken/baseUrl/userId; tuitui: appId/appSecret/host). */
   config: Record<string, unknown>;
   /**
    * INTENT state: whether the binding should hold a live connection (the connection's

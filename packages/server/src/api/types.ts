@@ -1749,7 +1749,7 @@ export interface SessionProcessesResponse {
 // ---------------------------------------------------------------------------
 
 /** Messaging channels a Session can bind to. */
-export type MessagingChannel = "feishu" | "telegram" | "qq" | "wechat";
+export type MessagingChannel = "feishu" | "telegram" | "qq" | "wechat" | "tuitui";
 
 /** Event-connection runtime state of one binding (kept in memory, not persisted). */
 export type MessagingRuntimeState = "disconnected" | "connecting" | "connected" | "error";
@@ -1872,6 +1872,23 @@ export interface FeishuBindingInfo extends MessagingBindingCommon {
   baseDomain: string;
 }
 
+/**
+ * The stored Tuitui (推推) config, secret masked (plaintext never leaves the server).
+ *
+ * The App ID is the account identity: unlike a Telegram bot token there is no second field
+ * to read an identity out of, and unlike WeChat's scan-issued token there is a console to
+ * copy one from. `host` is stored rather than assumed because the platform may be deployed
+ * on more than one host, and it is never secret.
+ */
+export interface TuituiBindingInfo extends MessagingBindingCommon {
+  channel: "tuitui";
+  appId: string;
+  /** Masked app secret (site-wide mask rule); absent when none is stored. */
+  appSecretMasked?: string;
+  /** IM host, e.g. `im.example.com`. The port is the platform's own (8282) and is not a field. */
+  host: string;
+}
+
 /** The stored Telegram config, token masked (plaintext never leaves the server). */
 export interface TelegramBindingInfo extends MessagingBindingCommon {
   channel: "telegram";
@@ -1958,7 +1975,7 @@ export interface WeChatBindingInfo extends MessagingBindingCommon {
 
 /** A Session's saved config for one messaging channel (`channel` is the discriminant). */
 export type MessagingBindingInfo =
-  FeishuBindingInfo | TelegramBindingInfo | QQBindingInfo | WeChatBindingInfo;
+  FeishuBindingInfo | TelegramBindingInfo | QQBindingInfo | WeChatBindingInfo | TuituiBindingInfo;
 
 /** One saved channel config with its event-connection runtime status. */
 export interface MessagingChannelState {
@@ -1979,6 +1996,12 @@ export interface MessagingBindingsResponse {
 /** GET / PUT …/messaging/feishu response: the Feishu config (null = not saved) plus its runtime status. */
 export interface FeishuBindingResponse {
   binding: FeishuBindingInfo | null;
+  status: MessagingRuntimeStatus;
+}
+
+/** GET / PUT …/messaging/tuitui response (the Tuitui narrowing of the same envelope). */
+export interface TuituiBindingResponse {
+  binding: TuituiBindingInfo | null;
   status: MessagingRuntimeStatus;
 }
 
@@ -2069,6 +2092,25 @@ export interface QQBindingPutRequest extends MessagingDeliveryPatch {
 }
 
 /**
+ * PUT …/messaging/tuitui — saves the credential pair and the host ONLY, same contract as the
+ * Feishu PUT (an enabled binding's connector restarts with the new credentials; the
+ * connection toggle is POST …/state). The App ID is the account identity, so changing it
+ * rebinds the row to a different robot and drops the remembered chat.
+ */
+export interface TuituiBindingPutRequest extends MessagingDeliveryPatch {
+  appId: string;
+  /** Omitted or blank keeps the stored secret (the masked value never round-trips). */
+  appSecret?: string;
+  /** Omitted or blank keeps the stored host, and an unset host defaults on the server. */
+  host?: string;
+  /**
+   * Drops the STORED secret (the models-page clear idiom; a typed `appSecret` wins over
+   * it). Refused with 409 `messaging_disable_before_clear` while the binding is enabled.
+   */
+  clearAppSecret?: boolean;
+}
+
+/**
  * PUT …/messaging/wechat — the delivery preferences ONLY.
  *
  * The one PUT on this router that carries no credential, because there is none to carry: a
@@ -2105,8 +2147,26 @@ export interface FeishuTestRequest {
   baseDomain?: string;
 }
 
+/** POST …/messaging/tuitui/test — draft values; each omitted field falls back to the stored binding. */
+export interface TuituiTestRequest {
+  appId?: string;
+  appSecret?: string;
+  host?: string;
+}
+
 /** Credential-test outcome (an unreachable/rejected credential is `ok:false`, not an HTTP error). */
 export interface FeishuTestResponse {
+  ok: boolean;
+  latencyMs?: number;
+  error?: string;
+}
+
+/**
+ * Tuitui credential-test outcome. The probe is the event socket's own handshake — the only
+ * thing these credentials are used for — so it says whether the platform accepts them, and
+ * nothing about which robot they name: this API reports no account label.
+ */
+export interface TuituiTestResponse {
   ok: boolean;
   latencyMs?: number;
   error?: string;
