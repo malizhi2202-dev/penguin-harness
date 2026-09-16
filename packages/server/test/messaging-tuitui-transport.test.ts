@@ -633,7 +633,7 @@ describe("the Tuitui HTTP client", () => {
     const transport = transportOf();
     const client = transport.createClient(CREDS);
     await withFetch(null, async (calls) => {
-      await client.react("alice", tuituiMessageIdOf("alice", "m-1"), "👀");
+      await client.sendReaction("alice", tuituiMessageIdOf("alice", "m-1"), "👀");
       expect(calls[0]?.url).toContain("/robot/message/custom/modify?");
       expect(bodyOf(calls[0]!)).toEqual({
         tousers: [{ user: "alice", msgid: "m-1" }],
@@ -641,7 +641,11 @@ describe("the Tuitui HTTP client", () => {
         emoji_reaction: { emoji: "👀", cancel: false },
       });
 
-      await client.react("teams_t-1_c-2_p-1", tuituiMessageIdOf("teams_t-1_c-2_p-1", "p-9"), "👀");
+      await client.sendReaction(
+        "teams_t-1_c-2_p-1",
+        tuituiMessageIdOf("teams_t-1_c-2_p-1", "p-9"),
+        "👀",
+      );
       expect(bodyOf(calls[1]!)).toEqual({
         toteams: [{ team_id: "t-1", channel_id: "c-2", parent_id: "p-1", post_id: "p-9" }],
         msgtype: "emoji_reaction",
@@ -650,8 +654,8 @@ describe("the Tuitui HTTP client", () => {
 
       // Nothing to react to: the platform identifies a message by its own id, not by the
       // conversation, and a frame that carried none gets no call.
-      await client.react("alice", tuituiMessageIdOf("alice", ""), "👀");
-      await client.react("alice", tuituiMessageIdOf("alice", "m-1"), "");
+      await client.sendReaction("alice", tuituiMessageIdOf("alice", ""), "👀");
+      await client.sendReaction("alice", tuituiMessageIdOf("alice", "m-1"), "");
       expect(calls).toHaveLength(2);
     });
   });

@@ -222,6 +222,21 @@ export interface MessagingClient {
   sendImage(chatId: string, file: MessagingOutboundFile): Promise<void>;
   /** Sends any other file into a chat as an attachment. */
   sendFile(chatId: string, file: MessagingOutboundFile): Promise<void>;
+  /**
+   * Marks one inbound message as received, where the channel has such a gesture.
+   *
+   * OPTIONAL, and the member's absence IS the channel's answer: Tuitui reacts to a message,
+   * Telegram could once someone implements it, and QQ and WeChat have no such notion at all.
+   * The bridge skips the channels that omit it rather than asking a capability question.
+   *
+   * No emoji parameter. The vocabulary is the channel's own — 推推's is 「收到」 — while the
+   * caller is the shared, channel-neutral bridge, which knows no channel's spelling; naming
+   * one here would put a channel literal back into a file that has none.
+   *
+   * A receipt is a courtesy, never an answer: a channel that refuses one must not be read as
+   * a failed delivery (see the bridge's noteReceipt).
+   */
+  react?(chatId: string, messageId: string): Promise<void>;
 }
 
 export interface MessagingChannelConnector {
@@ -237,6 +252,17 @@ export interface MessagingChannelConnector {
    * would otherwise ask for more messages than the channel can ever deliver.
    */
   readonly replyBudget?: number;
+  /**
+   * Whether this channel can mark an inbound message as received (see MessagingClient.react),
+   * declared up front so the bridge can skip the gesture WITHOUT building an outbound client
+   * to ask. Absent means no, which is the answer for Feishu, Telegram, QQ and WeChat today;
+   * Tuitui declares true.
+   *
+   * A declared capability is still not a promise: the bridge calls `client.react?.()` through
+   * the optional member, so a channel that declares this and ships a client without it is a
+   * skipped gesture, not a crash.
+   */
+  readonly receipt?: boolean;
   /** Builds the outbound client for one stored config (throws on a malformed document). */
   createClient(config: Record<string, unknown>): Promise<MessagingClient>;
   /**

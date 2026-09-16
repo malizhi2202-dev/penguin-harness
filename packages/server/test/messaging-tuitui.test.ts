@@ -35,7 +35,11 @@ import type {
   TuituiTransport,
 } from "../src/runtime/messaging/tuitui-api.js";
 import { TUITUI_DEFAULT_HOST, createTuituiTransport } from "../src/runtime/messaging/tuitui-api.js";
-import { TuituiConnector, tuituiConfigOf } from "../src/runtime/messaging/tuitui-connector.js";
+import {
+  TUITUI_RECEIPT_EMOJI,
+  TuituiConnector,
+  tuituiConfigOf,
+} from "../src/runtime/messaging/tuitui-connector.js";
 import { apiClient, createTestApp, provisionUser, waitFor } from "./helpers.js";
 import type { TestApp } from "./helpers.js";
 
@@ -109,7 +113,8 @@ class FakeTuituiClient implements TuituiBotClient {
     this.files.push({ chatId, fileName: file.fileName, via: "file" });
   }
 
-  async react(chatId: string, messageId: string, emoji: string): Promise<void> {
+  async sendReaction(chatId: string, messageId: string, emoji: string): Promise<void> {
+    if (this.t.failReaction !== null) throw new Error(this.t.failReaction);
     this.reactions.push({ chatId, messageId, emoji });
   }
 
@@ -146,6 +151,8 @@ class FakeTuituiTransport implements TuituiTransport {
   failAuth: string | null = null;
   /** Non-null makes every send throw with this message. */
   failSend: string | null = null;
+  /** Non-null makes every receipt throw with this message. */
+  failReaction: string | null = null;
 
   createClient(creds: TuituiCredentials): FakeTuituiClient {
     const client = new FakeTuituiClient(creds, this);
@@ -539,6 +546,9 @@ describe("tuitui binding routes", () => {
 
   // —— Inbound ————————————————————————————————————————————————————————————
 
+  /** Every receipt the platform was asked to put on a message, in order. */
+  const reactions = () => fake.clients.flatMap((c) => c.reactions);
+
   it("starts a Task from an inbound direct message and answers into the same conversation", async () => {
     await bindEnabled(SID);
     await fake.lastSession().fire(inbound({ nativeMessageId: "m-1", text: "what is the status?" }));
@@ -588,6 +598,65 @@ describe("tuitui binding routes", () => {
     await waitFor(() => fake.allTexts().length === 1);
     expect(fake.allTexts()[0]?.chatId).toBe(chatId);
     expect(fake.allTexts()[0]?.messageId).toBe(`${chatId}${SEP}p-9`);
+  });
+
+  // —— The receipt (emoji 回执) ——————————————————————————————————————————————
+
+  it("acknowledges an accepted message with the channel's own word for it", async () => {
+    await bindEnabled(SID);
+    await fake.lastSession().fire(inbound({ nativeMessageId: "m-r1", text: "hello" }));
+    await waitFor(() => runs.length === 1);
+    await waitFor(() => reactions().length === 1);
+    // The seam asks only that the message be marked received; the emoji is 推推's, and the
+    // anchor is the packed conversation id the reply path already uses.
+    expect(reactions()[0]).toEqual({
+      chatId: PEER,
+      messageId: `${PEER}${SEP}m-r1`,
+      emoji: TUITUI_RECEIPT_EMOJI,
+    });
+  });
+
+  it("receipts an addressed group message and leaves an unaddressed one untouched", async () => {
+    await bindEnabled(SID);
+    const session = fake.lastSession();
+    await session.fire(
+      inbound({ chatKind: "group", chatId: GROUP_ID, addressed: false, nativeMessageId: "m-r2" }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    // Dropped at the connector, so the bridge never sees it and nothing is acknowledged: a
+    // receipt here would tell the group the robot read a message it deliberately ignored.
+    expect(reactions()).toHaveLength(0);
+
+    await session.fire(
+      inbound({ chatKind: "group", chatId: GROUP_ID, addressed: true, nativeMessageId: "m-r3" }),
+    );
+    await waitFor(() => reactions().length === 1);
+    expect(reactions()[0]).toMatchObject({ chatId: GROUP_ID, messageId: `${GROUP_ID}${SEP}m-r3` });
+  });
+
+  it("does not acknowledge a redelivery a second time", async () => {
+    await bindEnabled(SID);
+    await fake.lastSession().fire(inbound({ nativeMessageId: "m-r4" }));
+    await waitFor(() => runs.length === 1);
+    await waitFor(() => reactions().length === 1);
+    await fake.lastSession().fire(inbound({ nativeMessageId: "m-r4" }));
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    // One gesture per message. The platform repeats the event on purpose, and the receipt is
+    // written before the run, so it hangs off the same dedup the run does.
+    expect(reactions()).toHaveLength(1);
+    expect(runs).toHaveLength(1);
+  });
+
+  it("treats a refused receipt as a courtesy lost, not as a failed delivery", async () => {
+    await bindEnabled(SID);
+    fake.failReaction = "Tuitui refused the reaction";
+    await fake.lastSession().fire(inbound({ nativeMessageId: "m-r5", text: "still works?" }));
+    await waitFor(() => runs.length === 1);
+    // The answer still goes out, the binding stays enabled, and the panel stays clean: a red
+    // "delivery failed" for a decorative gesture would send the reader hunting a real fault.
+    await waitFor(() => fake.allTexts().length === 1);
+    expect(t.deps.messagingRepo.find(SID, "tuitui")?.enabled).toBe(true);
+    expect(t.deps.messaging.statusOf(SID, "tuitui").lastDeliveryError).toBeUndefined();
   });
 
   it("sends the bridge's own test message once a chat is known, and refuses before that", async () => {

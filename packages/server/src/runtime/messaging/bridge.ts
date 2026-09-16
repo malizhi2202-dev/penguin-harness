@@ -1115,12 +1115,41 @@ export class MessagingBridge {
     return recent;
   }
 
+  /**
+   * The channel's own "I have it" gesture, where it has one — after the redelivery check (a
+   * replay must not gesture twice) and before the run, because the gesture is about the
+   * message ARRIVING, not about the answer to it.
+   *
+   * Fire-and-forget, and every failure stops here. A receipt is a courtesy: a platform that
+   * refuses one must not make the panel red — `lastDeliveryError` answers "did my answer get
+   * out", and this is not an answer — and it must not delay the run either, which is why the
+   * caller does not await it. The client comes from the ordinary cache, so the FIRST message
+   * of a connection (the one with no outbound client yet) is receipted as well.
+   */
+  private async noteReceipt(entry: BridgeEntry, msg: MessagingInboundMessage): Promise<void> {
+    // Asked of the connector, not of a client: a channel with no gesture must not pay for an
+    // outbound client being built on every inbound message just to be told so.
+    if (entry.connector.receipt !== true) return;
+    if (msg.messageId === "") return;
+    const row = this.deps.repo.find(entry.sessionId, entry.channel);
+    if (!row) return;
+    try {
+      const client = await this.clientFor(entry.sessionId, row);
+      await client.react?.(msg.chatId, msg.messageId);
+    } catch (err) {
+      this.log(
+        `[messaging] ${entry.channel} receipt failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
   private async onInbound(entry: BridgeEntry, msg: MessagingInboundMessage): Promise<void> {
     if (this.entries.get(entry.sessionId) !== entry) return; // stale connection
     if (this.isRedelivery(entry, msg)) return;
     // Stamped on acceptance, before anything can go wrong with it: the panel's question is
     // "did the channel deliver anything", which a later failure does not un-answer.
     entry.lastInboundAt = this.nowIso();
+    void this.noteReceipt(entry, msg);
     try {
       const isDirect = msg.chatKind === "direct";
       // The chat becomes the reply target BEFORE any processing: even a rejected message
