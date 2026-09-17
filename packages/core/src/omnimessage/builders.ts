@@ -31,6 +31,7 @@ import type {
   PartialToolCallPayload,
   RequestBeginPayload,
   RequestEndPayload,
+  RequestPrefixDetail,
   Role,
   SessionMetaMessage,
   SessionMetaPayload,
@@ -280,8 +281,10 @@ export function abortEvent(
 }
 
 /** request begin event: marks the start of one LLM Request. */
-export function requestBegin(): OmniMessage<RequestBeginPayload> {
-  return event({ type: "request_begin" });
+export function requestBegin(prefix: RequestPrefixDetail = {}): OmniMessage<RequestBeginPayload> {
+  // Only the defined fields are stamped: an absent optional field never reaches the wire (the
+  // Trace serializes to JSON), so an old reader sees exactly the payload it always did.
+  return event({ type: "request_begin", ...prefix });
 }
 
 /**

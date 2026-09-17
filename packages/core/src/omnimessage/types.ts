@@ -16,6 +16,8 @@
  * this protocol payload-for-payload — keep the page in sync when changing types here.
  */
 
+import type { ThinkingLevelName } from "../interfaces/shared.js";
+
 /** The outer message category. */
 export type OmniMessageType = "session_meta" | "model_msg" | "event_msg";
 
@@ -355,7 +357,47 @@ export interface TokenUsagePayload {
  * committed, and it also gives performance analysis a basis for Request latency and turn counts.
  * A compaction request produces this same event pair too (written to Trace only, not streamed).
  */
-export interface RequestBeginPayload {
+/**
+ * The request-prefix fingerprint block, stamped by `requestBegin` — the product-side record
+ * of the prefix this process handed the model for one Request, so a provider prompt-cache
+ * miss can be attributed after the fact instead of guessed at. Every field is optional and
+ * additive: old Traces replay unchanged (the same contract as `RetryDetail`).
+ *
+ * Why it exists: a provider caches a *rendered prefix*, and that cache holds only while the
+ * prefix repeats. Two opposite failures look identical in `token_usage` (cache_read 0,
+ * cache_write = the whole input): this process moved the prefix (a strict-tier violation —
+ * the head is meant to stay byte-fixed for a context's lifetime, so a re-assembled system
+ * prompt, a changed toolset or a rewritten message breaks it), or the provider stopped
+ * serving the cached prefix (eviction, expiry, routing). `prefix_head_hash` unchanged across
+ * a context's Requests says the head did not move, and `prefix_extends_prev` says nothing
+ * before the new input was rewritten; together with `cache_read` they separate the two.
+ *
+ * The fingerprint covers what the *engine* hands over (context meta and records, the input
+ * already sent in this context, and this Request's input). The assistant turns AgentHub
+ * appends, and the protocol/parameter conversion it performs, are outside it: this is a
+ * product-side anchor, deliberately not a claim about the provider's cache key.
+ */
+export interface RequestPrefixDetail {
+  /** sha256 (32 hex chars) over this Request's fingerprinted prefix. Two Requests with the same hash carried the same bytes. */
+  prefix_hash?: string;
+  /** sha256 (32 hex chars) over the fixed head alone — the `session_meta` record (system prompt, model reference) plus the tool-list record. Stable for a whole context when nothing re-assembled it. */
+  prefix_head_hash?: string;
+  /** How many records the fingerprint covers (head + input already sent in this context + this Request's input). */
+  prefix_records?: number;
+  /** Length of the fingerprinted serialization in UTF-16 code units: a tokenizer-free size probe to read a `cache_write` spike against. */
+  prefix_chars?: number;
+  /**
+   * Whether this Request's serialization extends the previous Request's **byte for byte**
+   * (nothing already sent was rewritten). Absent on a context's first Request — there is no
+   * predecessor. `false` means content predating this Request's new input changed, so the
+   * provider can at best reuse the prefix that ends before the rewrite.
+   */
+  prefix_extends_prev?: boolean;
+  /** The thinking level this Request carried — the soft-tier parameter whose change invalidates the provider's cached context even when the prefix repeats (interfaces/shared.ts `ThinkingLevelName`). Absent when the Request carried none. */
+  prefix_thinking_level?: ThinkingLevelName;
+}
+
+export interface RequestBeginPayload extends RequestPrefixDetail {
   type: "request_begin";
 }
 

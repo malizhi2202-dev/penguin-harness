@@ -24,6 +24,8 @@ export {
 } from "./generative-model.js";
 export { listEndpointModels } from "./list-models.js";
 export type { ListEndpointModelsOptions } from "./list-models.js";
+export { fingerprintRequestPrefix } from "./request-fingerprint.js";
+export type { PrefixFingerprintArgs, RequestPrefixFingerprint } from "./request-fingerprint.js";
 export { ToolCallIdAllocator, stripToolCallIdSuffix } from "./tool-call-ids.js";
 export {
   DEFAULT_CONTEXT_WINDOW,

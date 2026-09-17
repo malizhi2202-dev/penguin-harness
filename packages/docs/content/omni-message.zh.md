@@ -220,6 +220,20 @@ interface McpServerConnectResult {
 
 interface RequestBeginPayload {
   type: "request_begin";
+  // 以下为请求前缀指纹块 RequestPrefixDetail(由 builder 一处盖章;均为增量字段,旧 Trace 回放
+  // 不受影响)。它记录本次 Request 交给模型的前缀,使供应商 prompt cache 未命中(cache_read 为
+  // 0)可以归因而不必猜:同一 context 内 prefix_head_hash 不变,说明头部没动;
+  // prefix_extends_prev 说明已发出的内容没有被改写
+  prefix_hash?: string;          // 指纹前缀的 sha256(32 位十六进制):哈希相同即发出的字节相同
+  prefix_head_hash?: string;     // 仅固定头部的 sha256(32 位十六进制)——session_meta 记录
+                                 // (系统提示、模型引用)加工具清单记录
+  prefix_records?: number;       // 指纹覆盖的记录数(头部 + 本 context 内已发出的输入 +
+                                 // 本次 Request 的输入)
+  prefix_chars?: number;         // 指纹序列化的长度(UTF-16 码元):无需分词器的体积探针
+  prefix_extends_prev?: boolean; // 本次 Request 是否逐字节扩展上一次;context 首次请求不带。
+                                 // 为 false 表示本次新输入之前的内容被改写过
+  prefix_thinking_level?: ThinkingLevelName; // 本次 Request 携带的软限制参数:即使前缀重复,
+                                 // 改动它也会让供应商缓存的上下文失效
 }
 
 interface RequestEndPayload {

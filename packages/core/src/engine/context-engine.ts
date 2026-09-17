@@ -85,6 +85,8 @@ import type {
   ThinkingLevelName,
 } from "../interfaces/index.js";
 import { MergeQueue, pumpOpener } from "../internal/merge-queue.js";
+import { fingerprintRequestPrefix } from "../llm/request-fingerprint.js";
+import type { RequestPrefixDetail } from "../omnimessage/index.js";
 
 /** Trace sink: `write` a complete/event/meta message; `rotate` starts a new file (compaction splits files). */
 export interface TraceSink {
@@ -474,6 +476,19 @@ export class ContextEngine {
    * nothing keeps the previous records.
    */
   private contextRecords: OmniMessage[];
+  /**
+   * Input already handed to a **committed** Request in this context, in order — the engine's own
+   * model of what the prefix has grown by since it opened. A retried attempt is never committed
+   * (AgentHub appends a turn to its history only for a fully delivered response), so a retry
+   * must not append here or the fingerprint would count the same input twice. Cleared by
+   * `startNewContext`: a new context is a new prefix.
+   */
+  private sentInputs: OmniMessage[] = [];
+  /**
+   * The previous Request's fingerprinted serialization (see `fingerprintPrefix`), or null before
+   * this context's first Request — the baseline `prefix_extends_prev` is measured against.
+   */
+  private prefixBaseline: string | null = null;
   /** Session cumulative turn count: counted per LLM Request that produces token_usage, across Tasks; reset to zero after compaction completes. */
   private sessionTurns = 0;
   /** Whether the current context was produced by a compaction (`startNewContext`); this flag becomes meaningless once a new completed turn occurs. */
@@ -1141,6 +1156,33 @@ export class ContextEngine {
   }
 
   /**
+   * Fingerprints this Request's visible prefix and rolls the baseline forward — the
+   * product-side record that separates "we moved the prefix" from "the provider dropped it"
+   * when a Request comes back with `cache_read: 0` (see `RequestPrefixDetail`). Stamped on the
+   * `request_begin` that already brackets every Request, so no second event is invented.
+   *
+   * `keepBaseline` is for a compaction Request: its prefix is deliberately not the turn
+   * prefix, so it is worth stamping (it explains its own miss) but must not become the
+   * baseline a later turn Request is measured against — a compaction that fails keeps the old
+   * context, and the next turn still extends the prefix that was live before it.
+   */
+  private fingerprintPrefix(
+    input: OmniMessage[],
+    options: { keepBaseline?: boolean } = {},
+  ): RequestPrefixDetail {
+    const fingerprint = fingerprintRequestPrefix({
+      ...(this.contextMeta ? { meta: this.contextMeta } : {}),
+      records: this.contextRecords,
+      sent: this.sentInputs,
+      input,
+      previous: this.prefixBaseline,
+      ...(this.thinkingLevel !== undefined ? { thinkingLevel: this.thinkingLevel } : {}),
+    });
+    if (!options.keepBaseline) this.prefixBaseline = fingerprint.serialization;
+    return fingerprint.detail;
+  }
+
+  /**
    * Runs one LLM turn: consumes the LLM stream, approving each complete tool_call immediately;
    * "allow" runs it concurrently (without blocking further stream consumption/approval), "deny"
    * feeds back an aborted output. partial/complete tool_call_output is yielded in completion
@@ -1179,7 +1221,7 @@ export class ContextEngine {
         // Request boundary events (replayability): start is
         // emitted when the request is issued, stop carries the terminal state at completion —
         // replay mechanically determines from these whether the turn was committed by AgentHub.
-        const startEvt = requestBegin();
+        const startEvt = requestBegin(this.fingerprintPrefix(input));
         queue.push(startEvt);
         await this.write(startEvt);
         // Iterate manually to capture the generator's **return value** (LLMOutcome); LLM
@@ -1194,6 +1236,10 @@ export class ContextEngine {
           const res = await gen.next();
           if (res.done) {
             outcome = res.value;
+            // A fully delivered response is the one attempt AgentHub commits to its history, so
+            // this context's prefix has grown by exactly this input — see `sentInputs`. A
+            // retried attempt committed nothing and must not be counted twice.
+            if (outcome.status === "completed") this.sentInputs = [...this.sentInputs, ...input];
             // Non-completed outcomes carry the failure detail onto the event: a retried
             // request never produces an abort, so this is the only place observability
             // (the errors panel) can learn the real reason (e.g. a quota code). When the
@@ -1811,7 +1857,7 @@ export class ContextEngine {
     // The compaction request is itself an ordinary Request, emitting paired request events —
     // written to the (old) Trace only, not pushed to the stream, keeping the compaction process
     // invisible to Human.
-    await this.write(requestBegin());
+    await this.write(requestBegin(this.fingerprintPrefix(input, { keepBaseline: true })));
     const gen = this.llm.streamGenerate({
       newMessages: input,
       ...(signal ? { signal } : {}),
@@ -1942,6 +1988,10 @@ export class ContextEngine {
     this.llm = opened.llm;
     if (opened.sessionMeta) this.contextMeta = opened.sessionMeta;
     if (records.length > 0) this.contextRecords = records;
+    // A new context is a new prefix: the fingerprint chain starts over, so the first Request
+    // here is stamped without `prefix_extends_prev` and the next one is measured against it.
+    this.sentInputs = [];
+    this.prefixBaseline = null;
     if (opened.maxTurns !== undefined) this.maxTurns = opened.maxTurns;
     // The new context's baseline. A `readCompaction` provider re-reads the same file at the
     // next checkpoint and agrees with it; what this settles is the Session that has no

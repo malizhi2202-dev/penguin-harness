@@ -227,6 +227,26 @@ interface McpServerConnectResult {
 
 interface RequestBeginPayload {
   type: "request_begin";
+  // The RequestPrefixDetail block below is stamped in one place by the builders; every field
+  // is additive — old Traces replay unchanged. It records the prefix this Request handed the
+  // model, so a provider prompt-cache miss (`cache_read: 0`) can be attributed rather than
+  // guessed at: prefix_head_hash unchanged across a context says the head did not move, and
+  // prefix_extends_prev says nothing already sent was rewritten.
+  prefix_hash?: string;          // sha256 (32 hex) over the fingerprinted prefix: equal hashes
+                                 // mean the same bytes went out
+  prefix_head_hash?: string;     // sha256 (32 hex) over the fixed head alone — the
+                                 // session_meta record (system prompt, model reference) plus
+                                 // the tool-list record
+  prefix_records?: number;       // records the fingerprint covers (head + input already sent
+                                 // in this context + this Request's input)
+  prefix_chars?: number;         // length of the fingerprinted serialization in UTF-16 code
+                                 // units: a tokenizer-free size probe
+  prefix_extends_prev?: boolean; // this Request extends the previous one byte for byte;
+                                 // absent on a context's first Request. false means content
+                                 // predating this Request's new input changed
+  prefix_thinking_level?: ThinkingLevelName; // the soft-tier parameter carried by this
+                                 // Request: changing it invalidates the provider's cached
+                                 // context even when the prefix repeats
 }
 
 interface RequestEndPayload {
