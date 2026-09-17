@@ -19,6 +19,9 @@ conclusion, panel verdict, review record), plus the round's roadmap.
 - The roadmap ends in a change list ordered evidence-first. Two of its items are no longer
   pending and were delivered as their own changes — the agenthub bump and the Request
   prefix fingerprint — while the rest remain a queue: being listed there is not a commitment.
+- The record carries a dated status section beside that list, naming each item's state and the
+  commit that delivered it, so a list written before the work cannot be misread as eight open
+  items when two of them shipped.
 - Only one sub-topic passed the review gate, and the record says so rather than presenting all
   four conclusions as equally settled.
 - This is a process record, not product documentation: it is a snapshot of what one round
