@@ -214,6 +214,13 @@ export const platformImpl: Impl<PlatformApi, PlatformCtx> = {
       // Schedule scheduler: startup reconciliation (missed, don't backfill) + periodic
       // scan; only active while this App is.
       await deps.scheduler.start();
+      // Project alignment timers: the same startup reconciliation for Project-scoped timers,
+      // whose passes commit and merge in the Project's repositories — likewise only active while
+      // this App is. start() returns as soon as the interval is armed and runs its first pass in
+      // the background: that pass can fetch from a remote, and a slow network must not hold up
+      // the boot of everything else. A swap stops them with the scheduler; the successor
+      // reconciles fresh.
+      await deps.projectTimers.start();
       // Messaging bridge: connect every enabled Session binding (channel event
       // streams); only active while this App is, like the scheduler.
       await deps.messaging.start();
@@ -266,6 +273,8 @@ export const platformImpl: Impl<PlatformApi, PlatformCtx> = {
     //                         runtime-owned, re-claimed by every App; not this App's to park
     // SUSPENDED (stopped here; the successor rebuilds it fresh at load):
     //   - scheduler           stop() now; successor start() reconciles missed fires
+    //   - project timers      stop() now; successor start() relabels runs this process left
+    //                         open and reconciles missed slots the same way
     //   - messaging bridge    stop() closes the channel connections; successor start()
     //                         reconnects every enabled binding from the DB
     //   - agent runs          approvals → deny, drives → abort; a goal's GOAL.json reads
@@ -303,6 +312,7 @@ export const platformImpl: Impl<PlatformApi, PlatformCtx> = {
       const drains: Promise<unknown>[] = [];
       if (business !== null) {
         business.scheduler.stop();
+        business.projectTimers.stop();
         business.messaging.stop();
         business.machines.stop();
         drains.push(business.manager.shutdown(DRAIN_GRACE_MS));

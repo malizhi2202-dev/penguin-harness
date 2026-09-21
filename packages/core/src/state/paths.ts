@@ -172,6 +172,16 @@ export function scheduleDir(root: string, projectId: string, agentId: string): s
   return path.join(agentStateDir(root, projectId, agentId), "schedule");
 }
 
+/**
+ * `<projectDir>/timers.toml`, the Project's alignment-timer declaration — one file per
+ * Project, not one per Agent: what a timer aligns (the Project's repositories) is
+ * Project-scoped, so it does not belong under any single Agent's state. Absent when the
+ * Project declares no timers; the system never writes it back (see the timer runner).
+ */
+export function projectTimersFile(root: string, projectId: string): string {
+  return path.join(projectDir(root, projectId), "timers.toml");
+}
+
 /** `<agentDir>/benchmarks`, the capability-evaluation question bank and scores (doesn't exist when unconfigured). */
 export function benchmarksDir(root: string, projectId: string, agentId: string): string {
   return path.join(agentDir(root, projectId, agentId), "benchmarks");

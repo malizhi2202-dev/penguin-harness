@@ -358,6 +358,43 @@ period = "12h"
 
 模板的 `{{SCHEDULES}}` 占位符展开为 `schedules.prompt`：教模型用文件工具自行管理这些 TOML 文件（目录、字段规则、约 30 秒自动生效、防重复等卫生规则），末尾经 `{{SCHEDULE_LIST}}` 注入现有任务名列表。提示词可在定时任务标签页编辑；`schedules.enabled` 关闭则整段为空——server 照常按计划触发任务，只是模型不了解任务体系。早于本机制创建的 Agent 模板没有该占位符，标签页提供一键插入。
 
+## 对齐定时器
+
+每个 Project 可以在自己的目录下声明 `timers.toml`（`<projectDir>/timers.toml`）。每个 `[[timer]]` 条目按节律对齐该 Project 的本地仓库与上游、检查文档与代码的一致性，并可把发现的问题交给 Agent 处理。与定时任务相同，对齐定时器仅在 Web 服务运行期间执行，在右侧 Dock 的「对齐定时器」面板管理——文件本身可手工编辑，面板只是它的一个视图。
+
+定时器遍历的仓库，就是该 Project 的 Workspace 所在的仓库，与 Git 面板所见完全一致。没有仓库列表可配置：Project 无法被指向自己从未使用过的 checkout。
+
+| 字段 | 必填 | 说明 |
+| --- | --- | --- |
+| `name` | 是 | 文件内的标识，小写 id |
+| `enabled` | 否 | 是否启用，缺省 `false` |
+| `start_at` | 是 | 首次触发时刻（ISO 8601） |
+| `period` | 否 | 周期，形如 `30m` / `12h` / `7d`，下限 5 分钟；缺省为一次性 |
+| `end_at` | 否 | 结束时刻，须晚于 `start_at` |
+| `sync` | 否 | `none` / `fetch` / `fast-forward` / `merge`，缺省 `fetch` |
+| `commit` | 否 | `off` / `auto`，缺省 `off` |
+| `docs` | 否 | 是否执行文档 / 提交 / 代码的漂移检查，缺省 `true` |
+| `agent_prompt` | 否 | 设置后，发现需要处理的问题时把该 Prompt 连同报告发送给一个 Session |
+| `session_id` | 否 | 把上述交接绑定到既有 Session；与下列三项互斥 |
+| `workspace` / `provider` / `model_id` | 否 | 新建 Session 的交接目标（缺省使用 Project 内置 Agent） |
+
+```toml
+[[timer]]
+name = "git-align"
+enabled = true
+start_at = 2026-08-01T09:00:00Z
+period = "1h"
+sync = "fast-forward"
+commit = "auto"
+agent_prompt = "按这份报告修复文档漂移。"
+```
+
+一次运行依次做三件事。若 `commit = "auto"`，先提交工作区（提交信息由 diff 生成，并在 trailer 中注明来源）；然后 fetch，并以 fast-forward 方式（`sync = "merge"` 时为 merge）把分支对齐到上游；最后报告漂移：代码变了而没有任何文档变、文档变了而没有代码变、改动的文档里相对链接或代码段路径指向不存在的目标（以 `file:line` 报告），以及尚未落到上游的本地提交。
+
+这套约束正是本功能的核心，值得明确写出：它从不 force-push、从不 rebase、从不改写历史。发生冲突的合并会被中止并上报，工作区保持原样，而不是留下一个半合并的 checkout 让别人去发现。仓库若处于未完成的 git 操作中（merge、rebase、cherry-pick、revert），则跳过该仓库，而不是替它"清理"。多个仓库逐个处理，因为对同一个索引并发操作必然相互竞争。server 第一次看到某个定时器时，已经过去的触发时刻只被消费、不会被补跑——重启不会触发昨天的对齐。无论本次成功与否，该时刻都会被消费，因此失败会被如实上报，而不是陷入重试循环。`commit = "auto"` 需要显式开启，手动运行可以选择 dry run，检查本身是确定性的：不调用模型，同一棵树永远得到同一份报告。
+
+已知边界也一并写明，以免日后才发现。这里不与任何托管平台通信：不感知 pull request、review 或 CI，"尚未落地的提交"（本地领先上游的提交）是 PR 状态在本地的替代品。漂移检查基于模式而非语义——一份含义上悄悄与代码脱节的文档不会被发现。当绑定的 Session 正忙时，交接会被跳过，下一次运行会报告同样的发现。
+
 ## 设计原则
 
 Agent 的行为完整地存放于磁盘上的可编辑文件——提示词、Skill、配置都是数据而非代码。正因如此，Agent 才能被 Agent 改进：优化器编辑的与你手工编辑的是同一批文件。参见[自我进化](/self-improvement)与 [CLI 参考](/cli)。

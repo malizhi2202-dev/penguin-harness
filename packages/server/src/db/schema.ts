@@ -116,6 +116,30 @@ CREATE TABLE IF NOT EXISTS schedule_state (    -- schedule runtime state (files 
   invalid_reason  TEXT,                        -- invalidation reason (e.g. the bound Session was deleted); NULL=healthy
   PRIMARY KEY (project_id, agent_id, name)
 );
+CREATE TABLE IF NOT EXISTS project_timer_state (  -- Project alignment timers (timers.toml is declarative intent; the system never writes it back)
+  project_id     TEXT NOT NULL,
+  name           TEXT NOT NULL,               -- [[timer]] name, its identity inside the Project's file
+  def_hash       TEXT NOT NULL,               -- file content fingerprint: an edit clears the invalid flag (the timer takes effect again)
+  start_at_ms    INTEGER NOT NULL,            -- defines identity: a start_at change counts as a new timer instance, resetting its consumed slots
+  last_slot_ms   INTEGER,                     -- latest due slot already consumed (advances on fire or skip; no backfill across restarts)
+  last_run_at    TEXT,                        -- last FINISHED run time (for display; a run that died mid-flight appears only in project_timer_runs)
+  last_status    TEXT,                        -- that run's outcome: ok | merged | drift | failed
+  last_summary   TEXT,                        -- JSON alignment report of that run (api types AlignmentSummary); NULL until one ran
+  invalid_reason TEXT,                        -- invalidation reason (e.g. the bound Session was deleted); NULL=healthy
+  PRIMARY KEY (project_id, name)
+);
+CREATE TABLE IF NOT EXISTS project_timer_runs (  -- one row per alignment run; a row left with finished_at NULL died with the process running it
+  run_id      TEXT PRIMARY KEY,
+  project_id  TEXT NOT NULL,
+  name        TEXT NOT NULL,
+  trigger     TEXT NOT NULL,                  -- 'schedule' | 'manual'
+  dry_run     INTEGER NOT NULL DEFAULT 0,     -- 1 = the pass reported without touching the work tree (the panel's check button)
+  started_at  TEXT NOT NULL,
+  finished_at TEXT,
+  status      TEXT NOT NULL,                  -- ok | merged | drift | failed | running | interrupted (a run the next boot relabelled)
+  summary     TEXT                            -- JSON alignment report (api types AlignmentSummary)
+);
+CREATE INDEX IF NOT EXISTS idx_project_timer_runs ON project_timer_runs(project_id, name, started_at DESC);
 CREATE TABLE IF NOT EXISTS messaging_bindings ( -- Session ↔ messaging-channel bot bindings (runtime/messaging/ holds the long connections)
   session_id       TEXT NOT NULL,              -- a Session keeps at most one saved config PER channel (composite PK below); at most ONE of them is enabled at a time (route-enforced, 409 another_channel_enabled), and enabling is what binds the account to this Session
   channel          TEXT NOT NULL,              -- messaging channel discriminator ('feishu' | 'telegram' | 'qq' | 'wechat' | 'tuitui')

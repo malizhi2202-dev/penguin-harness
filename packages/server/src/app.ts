@@ -50,6 +50,7 @@ import { migrate } from "./db/migrations.js";
 import { ErrorsRepo } from "./db/repos/errors.js";
 import { MessagingBindingsRepo } from "./db/repos/messaging-bindings.js";
 import { SchedulesRepo } from "./db/repos/schedules.js";
+import { ProjectTimersRepo } from "./db/repos/project-timers.js";
 import { ServerSettingsRepo } from "./db/repos/server-settings.js";
 import { SessionsRepo } from "./db/repos/sessions.js";
 import { UiPrefsRepo } from "./db/repos/ui-prefs.js";
@@ -79,6 +80,7 @@ import {
 } from "./runtime/session-manager.js";
 import { SessionSources } from "./runtime/session-sources.js";
 import { Scheduler } from "./runtime/scheduler.js";
+import { ProjectTimerRunner } from "./runtime/project-timer-runner.js";
 import { MessagingBridge } from "./runtime/messaging/bridge.js";
 import { FeishuConnector } from "./runtime/messaging/feishu-connector.js";
 import { createLarkSdk } from "./runtime/messaging/feishu-sdk.js";
@@ -163,6 +165,7 @@ import { agentTransferRoutes } from "./http/routes/agent-transfer.js";
 import { agentsRoutes } from "./http/routes/agents.js";
 import { dirsRoutes } from "./http/routes/dirs.js";
 import { gitRoutes } from "./http/routes/git.js";
+import { projectTimerRoutes } from "./http/routes/timers.js";
 import { directorySkillsRoutes } from "./http/routes/directory-skills.js";
 import { agentConfigRoutes } from "./http/routes/agent-config.js";
 import { agentTracesRoutes } from "./http/routes/agent-traces.js";
@@ -217,6 +220,8 @@ export interface AppDeps {
   /** WeChat scan-to-connect: the in-flight codes and the poll handles that never leave the server. */
   wechatScan: WeChatScanService;
   scheduler: Scheduler;
+  /** Project alignment timers: the runner (tick + manual runs) and their state/history. */
+  projectTimers: ProjectTimerRunner;
   channels: ChannelHub;
   manager: SessionManager;
   /** Session-origin registry derived from session_meta (single source of truth; no DB column). */
@@ -893,6 +898,7 @@ export function buildAppDeps(
     };
   };
   const schedulesRepo = new SchedulesRepo(db);
+  const projectTimersRepo = new ProjectTimersRepo(db);
 
   // The common configuration scope is disabled while a real Project carries its reserved id
   // (see ProjectService.isCommonScopeBlocked); the predicate is evaluated per call, so renaming
@@ -1117,6 +1123,22 @@ export function buildAppDeps(
     },
     ...(overrides.now ? { now: () => overrides.now!().getTime() } : {}),
   });
+  // Project alignment timers: assembled here, started by platform.ts's create() next to the
+  // scheduler (tests drive it via tickOnce, no real timer), stopped by the same dispose effect.
+  const projectTimers = new ProjectTimerRunner({
+    root: config.root,
+    repo: projectTimersRepo,
+    projects: projectsRepo,
+    sessions: sessionsRepo,
+    runner: manager,
+    sessionCreator: sessionService,
+    projectConfig: projectConfigService,
+    errors,
+    notify: (userId, event) => {
+      channels.get(userChannelKey(userId)).publish(event, "server_event");
+    },
+    ...(overrides.now ? { now: () => overrides.now!().getTime() } : {}),
+  });
 
   return {
     config,
@@ -1149,6 +1171,7 @@ export function buildAppDeps(
     wechatScan,
     messaging,
     scheduler,
+    projectTimers,
     channels,
     manager,
     sessionSources,
@@ -1290,6 +1313,7 @@ export function createApp(
   app.route("/api/projects/:projectId/agents", agentsRoutes(deps));
   app.route("/api/projects/:projectId/dirs", dirsRoutes(deps));
   app.route("/api/projects/:projectId/git", gitRoutes(deps));
+  app.route("/api/projects/:projectId/timers", projectTimerRoutes(deps));
   app.route("/api/projects/:projectId/dir-skills", directorySkillsRoutes(deps));
   app.route("/api/projects/:projectId/agents/:agentId/config", agentConfigRoutes(deps));
   app.route("/api/projects/:projectId/agents/:agentId/vault", vaultRoutes(deps));

@@ -219,6 +219,53 @@ export const MIGRATIONS: readonly Migration[] = [
       `);
     },
   },
+  {
+    version: 5,
+    name: "project-timers",
+    // Two new tables, nothing existing touched: a platform rolled back to one without Project
+    // timers never queries them (its scheduler simply stops firing them).
+    swapSafe: true,
+    up(db) {
+      // Frozen copy of the DDL as of the Project-timers feature; do not re-derive from schema.ts.
+      // IF NOT EXISTS because the declarative track may already have created them (ADOPTION).
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS project_timer_state (
+          project_id     TEXT NOT NULL,
+          name           TEXT NOT NULL,
+          def_hash       TEXT NOT NULL,
+          start_at_ms    INTEGER NOT NULL,
+          last_slot_ms   INTEGER,
+          last_run_at    TEXT,
+          last_status    TEXT,
+          last_summary   TEXT,
+          invalid_reason TEXT,
+          PRIMARY KEY (project_id, name)
+        );
+        CREATE TABLE IF NOT EXISTS project_timer_runs (
+          run_id      TEXT PRIMARY KEY,
+          project_id  TEXT NOT NULL,
+          name        TEXT NOT NULL,
+          trigger     TEXT NOT NULL,
+          dry_run     INTEGER NOT NULL DEFAULT 0,
+          started_at  TEXT NOT NULL,
+          finished_at TEXT,
+          status      TEXT NOT NULL,
+          summary     TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_project_timer_runs ON project_timer_runs(project_id, name, started_at DESC);
+      `);
+    },
+    // LOSES every timer's consumed-slot bookkeeping (a restored build would re-baseline its
+    // timers at the next reconcile, so nothing fires twice) and the whole run history, which
+    // only ever fed the panel's "last run" line.
+    down(db) {
+      db.exec(`
+        DROP INDEX IF EXISTS idx_project_timer_runs;
+        DROP TABLE IF EXISTS project_timer_runs;
+        DROP TABLE IF EXISTS project_timer_state;
+      `);
+    },
+  },
 ];
 
 /** The highest version this build knows how to reach. */

@@ -2437,6 +2437,7 @@ export type ServerEvent =
       source: SessionSource;
     }
   | ScheduleServerEvent
+  | ProjectTimerServerEvent
   | GoalServerEvent;
 
 /** Goal-mode progress on the session channel (the chat page drives its goal banner from these). */
@@ -2466,6 +2467,22 @@ export type ScheduleServerEvent =
       name: string;
       sessionId: string;
     };
+
+/**
+ * A Project alignment timer finished a pass (user-level event stream, like the schedule events).
+ * The panel refreshes on it; `attention` is the count of findings that ask for a look, and
+ * `handedOff` says whether this run sent them to a Session.
+ */
+export type ProjectTimerServerEvent = {
+  type: "project_timer_ran";
+  projectId: string;
+  name: string;
+  runId: string;
+  status: ProjectTimerRunStatus;
+  attention: number;
+  handedOff: boolean;
+  sessionId?: string;
+};
 
 // ---------------------------------------------------------------------------
 // Trace browsing and performance analysis
@@ -3145,6 +3162,145 @@ export interface SchedulesResponse {
   schedules: ScheduleItem[];
   /** Files that failed to parse (skipped from scheduling and logged as errors). */
   invalidFiles: Array<{ name: string; error: string }>;
+}
+
+// ---------------------------------------------------------------------------
+// Project alignment timers
+// ---------------------------------------------------------------------------
+
+/** Display-facing timer status: the file's `enabled` is intent; the rest is derived from runtime state. */
+export type ProjectTimerStatus = "active" | "disabled" | "expired" | "done" | "invalid";
+
+/** How far a timer may go towards its upstream. */
+export type ProjectTimerSyncMode = "none" | "fetch" | "fast-forward" | "merge";
+
+/** Whether the pass commits the work tree before syncing. */
+export type ProjectTimerCommitMode = "off" | "auto";
+
+export interface ProjectTimerItem {
+  /** The `[[timer]]` name inside the Project's file. */
+  name: string;
+  enabled: boolean;
+  /** ISO 8601. */
+  startAt: string;
+  /** Raw fixed interval (e.g. `30m`); unset means a one-off run. */
+  period?: string;
+  endAt?: string;
+  sync: ProjectTimerSyncMode;
+  commit: ProjectTimerCommitMode;
+  docs: boolean;
+  /** When set, a run that finds something worth attention hands its report to a Session with this prompt. */
+  agentPrompt?: string;
+  sessionId?: string;
+  workspace?: string;
+  modelId?: string;
+  provider?: string;
+  status: ProjectTimerStatus;
+  invalidReason?: string;
+  /** Next scheduled run (ISO 8601); unset when done/expired/invalid/disabled. */
+  nextRunAt?: string;
+  /** The last finished run. */
+  lastRunAt?: string;
+  lastStatus?: ProjectTimerRunStatus;
+  /** The last run's report, as stored. */
+  lastSummary?: AlignmentSummary;
+  /** A pass is running right now (a manual run or the tick). */
+  running: boolean;
+}
+
+/** One timer file, one Project: the declaration is a single hand-editable file, so the response carries it whole. */
+export interface ProjectTimersResponse {
+  /** The file the timers come from; `exists` is false for a Project that declares none. */
+  file: { path: string; raw: string; exists: boolean };
+  timers: ProjectTimerItem[];
+  /** Entries the file declared but that could not be used; their neighbours still run. */
+  errors: Array<{ name: string; error: string }>;
+  /** The file itself is unusable (not TOML, wrong shape): nothing from it is scheduled. */
+  fileError?: string;
+}
+
+export interface ProjectTimersWriteRequest {
+  /** The whole file, exactly as it will be written. */
+  raw: string;
+}
+
+/** A run's outcome: `ok` nothing to do, `merged` the pass changed the branch, `drift` findings want attention. */
+export type ProjectTimerRunStatus =
+  "ok" | "merged" | "drift" | "failed" | "running" | "interrupted";
+
+export interface ProjectTimerRunRecord {
+  runId: string;
+  name: string;
+  trigger: "schedule" | "manual";
+  /** The pass reported without touching the work tree. */
+  dryRun: boolean;
+  startedAt: string;
+  /** Unset while it runs, and for a run whose process died — see `interrupted`. */
+  finishedAt?: string;
+  status: ProjectTimerRunStatus;
+  summary?: AlignmentSummary;
+}
+
+/** How much a finding asks of the reader; `attention` is what a timer may hand to an Agent. */
+export type AlignmentFindingSeverity = "info" | "attention";
+
+export type AlignmentFindingKind =
+  | "dirty_worktree"
+  | "operation_in_progress"
+  | "detached"
+  | "no_upstream"
+  | "diverged"
+  | "merge_conflict"
+  | "sync_failed"
+  | "code_without_docs"
+  | "docs_without_code"
+  | "broken_doc_refs"
+  | "commits_not_landed"
+  | "read_failed";
+
+export interface AlignmentFinding {
+  kind: AlignmentFindingKind;
+  severity: AlignmentFindingSeverity;
+  /** One line a person can act on. */
+  detail: string;
+  /** Evidence: repository-relative paths, or `path:line → target` for the reference check. */
+  files?: string[];
+}
+
+export interface AlignmentRepoReport {
+  /** The Workspace this repository was reached from. */
+  path: string;
+  root: string;
+  name: string;
+  branch: string | null;
+  upstream: string | null;
+  ahead: number;
+  behind: number;
+  /** What the pass did here, in order — the run's audit trail. */
+  actions: string[];
+  findings: AlignmentFinding[];
+  /** Change-set size by kind. */
+  changed: { code: number; docs: number };
+  merged: number;
+  committed: number;
+  error?: string;
+}
+
+/** One alignment pass's report: what it did, what it found, and where. */
+export interface AlignmentSummary {
+  at: string;
+  sync: ProjectTimerSyncMode;
+  commit: ProjectTimerCommitMode;
+  dryRun: boolean;
+  repos: AlignmentRepoReport[];
+  counts: {
+    repos: number;
+    findings: number;
+    attention: number;
+    merged: number;
+    committed: number;
+    failed: number;
+  };
 }
 
 export interface ScheduleUpsertRequest {

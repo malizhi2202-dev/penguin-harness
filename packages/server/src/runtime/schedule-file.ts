@@ -12,8 +12,22 @@ import { parse as parseToml } from "smol-toml";
 /** `period` lower bound: below 5 minutes is treated as an invalid file (guards against runaway high-frequency tasks). */
 export const MIN_PERIOD_MS = 5 * 60_000;
 
+/**
+ * The trigger-time shape shared by Agent schedules and Project alignment timers. The slot
+ * math at the bottom of this file only reads these three fields, so both declarations reuse
+ * it rather than growing a second, subtly different cron implementation.
+ */
+export interface SlotSpec {
+  /** First trigger time (epoch ms). */
+  startAtMs: number;
+  /** Trigger period (ms); undefined means a one-shot task. */
+  periodMs?: number;
+  /** End time (epoch ms); no more triggers once past it. */
+  endAtMs?: number;
+}
+
 /** A parsed schedule definition (the filename minus `.toml` is its identity). */
-export interface ScheduleDefinition {
+export interface ScheduleDefinition extends SlotSpec {
   name: string;
   /** The Prompt to send (required). */
   prompt: string;
@@ -21,16 +35,10 @@ export interface ScheduleDefinition {
   enabled: boolean;
   /** Original text of the first trigger time (for API echo, preserving the written form). */
   startAt: string;
-  /** First trigger time (epoch ms). */
-  startAtMs: number;
   /** Original text of the end time. */
   endAt?: string;
   /** Original text of the trigger period (e.g. `30m`, for API echo); undefined means a one-shot task. */
   period?: string;
-  /** Trigger period (ms); undefined means a one-shot task. */
-  periodMs?: number;
-  /** End time (epoch ms); no more triggers once past it. */
-  endAtMs?: number;
   /** The target Session to bind to; defaults to creating a new Session each time. */
   sessionId?: string;
   /** Workspace for new-Session mode (same semantics as manually starting a session; a temporary workspace is auto-created if unspecified). */
@@ -196,7 +204,7 @@ export function parseScheduleFile(name: string, raw: string): ScheduleParseResul
  * than `nowMs`; null if `start_at` hasn't been reached yet. A one-shot task's only slot
  * is `start_at` itself.
  */
-export function latestSlotAt(def: ScheduleDefinition, nowMs: number): number | null {
+export function latestSlotAt(def: SlotSpec, nowMs: number): number | null {
   if (nowMs < def.startAtMs) return null;
   if (def.periodMs === undefined) return def.startAtMs;
   const k = Math.floor((nowMs - def.startAtMs) / def.periodMs);
@@ -204,7 +212,7 @@ export function latestSlotAt(def: ScheduleDefinition, nowMs: number): number | n
 }
 
 /** Whether a scheduled slot still falls within the `[start_at, end_at]` window (always true if there's no end_at). */
-export function slotInWindow(def: ScheduleDefinition, slotMs: number): boolean {
+export function slotInWindow(def: SlotSpec, slotMs: number): boolean {
   return def.endAtMs === undefined || slotMs <= def.endAtMs;
 }
 
@@ -213,7 +221,7 @@ export function slotInWindow(def: ScheduleDefinition, slotMs: number): boolean {
  * for a one-shot task this only has a value while start_at hasn't been reached, and
  * returns null once past end_at.
  */
-export function nextSlotAfter(def: ScheduleDefinition, nowMs: number): number | null {
+export function nextSlotAfter(def: SlotSpec, nowMs: number): number | null {
   let next: number;
   if (nowMs < def.startAtMs) {
     next = def.startAtMs;

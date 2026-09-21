@@ -234,6 +234,16 @@ The paths below omit the `/api/projects/:projectId` prefix.
 
 Schedule writes are owner-only. A task in new-Session mode carries `modelId` and `provider` together or not at all; the pair is checked against the Project's model table when the task is saved and again when the scheduler reconciles it.
 
+### Project timers
+
+| Method | Path | Description |
+| --- | --- | --- |
+| GET / PUT | /timers | Read the Project's timer file, its state and its next runs / replace the whole file |
+| POST | /timers/:name/run | Run one timer now; `{dryRun: true}` reports without touching the work tree (409 while a pass is already in flight) |
+| GET | /timers/:name/runs | That timer's run history, newest first (`limit`) |
+
+Reads are open to any member; writes and manual runs are owner-only. The file is replaced whole and validated by the same parser a hand-edited file gets: a file that cannot be interpreted at all is a 400 and is not written, while a file whose individual entry is unusable is saved with that entry's error returned in `errors`. The repositories a timer passes over are the ones the Project's Workspaces sit in — there is no repository list to configure.
+
 ### Session Creation and Directory Browsing
 
 | Method | Path | Description |

@@ -17,6 +17,7 @@
  * unstage, commit, checkout, fetch, pull, push — exist only for the page's buttons.
  */
 import { execFile } from "node:child_process";
+import fs from "node:fs/promises";
 import path from "node:path";
 import type {
   GitBranch,
@@ -489,24 +490,7 @@ export async function readRepoDetail(root: string, dir: string): Promise<GitRepo
           .filter(Boolean)
       : [];
 
-  let upstream: string | null = null;
-  let ahead = 0;
-  let behind = 0;
-  const upstreamRun = await runGit(root, [
-    "rev-parse",
-    "--abbrev-ref",
-    "--symbolic-full-name",
-    "@{u}",
-  ]);
-  if (upstreamRun.code === 0 && upstreamRun.stdout.trim()) {
-    upstream = upstreamRun.stdout.trim();
-    const counts = await runGit(root, ["rev-list", "--left-right", "--count", "@{u}...HEAD"]);
-    if (counts.code === 0) {
-      const [behindText = "0", aheadText = "0"] = counts.stdout.trim().split(/\s+/);
-      behind = Number.parseInt(behindText, 10) || 0;
-      ahead = Number.parseInt(aheadText, 10) || 0;
-    }
-  }
+  const { upstream, ahead, behind } = await readUpstream(root);
 
   return {
     path: dir,
@@ -522,6 +506,28 @@ export async function readRepoDetail(root: string, dir: string): Promise<GitRepo
     status,
     branches,
     remotes,
+  };
+}
+
+/** Upstream distance of the current branch — shared by the Git page's detail read and the alignment pass. */
+async function readUpstream(
+  root: string,
+): Promise<{ upstream: string | null; ahead: number; behind: number }> {
+  const upstreamRun = await runGit(root, [
+    "rev-parse",
+    "--abbrev-ref",
+    "--symbolic-full-name",
+    "@{u}",
+  ]);
+  const upstream = upstreamRun.code === 0 ? upstreamRun.stdout.trim() : "";
+  if (!upstream) return { upstream: null, ahead: 0, behind: 0 };
+  const counts = await runGit(root, ["rev-list", "--left-right", "--count", "@{u}...HEAD"]);
+  if (counts.code !== 0) return { upstream, ahead: 0, behind: 0 };
+  const [behindText = "0", aheadText = "0"] = counts.stdout.trim().split(/\s+/);
+  return {
+    upstream,
+    behind: Number.parseInt(behindText, 10) || 0,
+    ahead: Number.parseInt(aheadText, 10) || 0,
   };
 }
 
@@ -732,4 +738,278 @@ export async function pushBranch(
   const run = await runGit(root, args, { timeoutMs: NETWORK_TIMEOUT_MS });
   if (run.code !== 0) throw gitFailure("Pushing", run);
   return (run.stderr.trim() || run.stdout.trim()).slice(0, MAX_BODY_CHARS);
+}
+
+// ---------------------------------------------------------------------------
+// Alignment-pass primitives.
+//
+// The Project timer drives git with no page in front of it, so it needs reads and writes the
+// page never asks for: "is this tree mine to touch at all?", "what changed since upstream?",
+// "commit this exactly as it stands, and tell me what it was". They live here rather than in
+// the timer so every argument still reaches git through the same validated layer, and they
+// stay out of the routes because nothing a user clicks should merge or auto-commit.
+// ---------------------------------------------------------------------------
+
+/** An unfinished operation in the repository: the tree holds work that is not the timer's to finish. */
+export type GitOperation = "merge" | "rebase" | "cherry-pick" | "revert";
+
+/** Markers git leaves in `.git` while an operation is in progress, in report order. */
+const OPERATION_MARKERS: ReadonlyArray<readonly [string, GitOperation]> = [
+  ["MERGE_HEAD", "merge"],
+  ["rebase-merge", "rebase"],
+  ["rebase-apply", "rebase"],
+  ["CHERRY_PICK_HEAD", "cherry-pick"],
+  ["REVERT_HEAD", "revert"],
+];
+
+/** The unfinished operation in this repository, or null when it is in a normal state. */
+async function readOperation(root: string): Promise<GitOperation | null> {
+  for (const [marker, operation] of OPERATION_MARKERS) {
+    const run = await runGit(root, ["rev-parse", "--git-path", marker]);
+    if (run.code !== 0) continue;
+    const located = run.stdout.trim();
+    if (!located) continue;
+    const absolute = path.isAbsolute(located) ? located : path.resolve(root, located);
+    try {
+      await fs.access(absolute);
+      return operation;
+    } catch {
+      // Absent marker: this is not the operation in progress.
+    }
+  }
+  return null;
+}
+
+/** Everything the alignment pass decides from, in one read of the repository. */
+export interface GitWorktreeState {
+  branch: string | null;
+  detached: boolean;
+  /** No commits yet: there is no HEAD to merge into, and no upstream to be behind. */
+  empty: boolean;
+  upstream: string | null;
+  ahead: number;
+  behind: number;
+  /** Tracked paths with staged or unstaged changes — what stops the pass from merging. */
+  trackedChanges: string[];
+  /** Untracked paths. They do not block a commit; git itself refuses a merge that would overwrite one. */
+  untracked: string[];
+  conflicted: string[];
+  operation: GitOperation | null;
+}
+
+export async function readWorktreeState(root: string): Promise<GitWorktreeState> {
+  const { branch, detached } = await readBranchName(root);
+  const head = await readHead(root);
+  const status = await readStatus(root);
+  const { upstream, ahead, behind } = await readUpstream(root);
+  const operation = await readOperation(root);
+  const paths = (pick: (f: GitStatusFile) => boolean) =>
+    status.files.filter(pick).map((f) => f.path);
+  return {
+    branch,
+    detached,
+    empty: head === null,
+    upstream,
+    ahead,
+    behind,
+    trackedChanges: paths((f) => !f.untracked && !f.conflicted),
+    untracked: paths((f) => f.untracked),
+    conflicted: paths((f) => f.conflicted),
+    operation,
+  };
+}
+
+/** One file's line counts in a diff, for the auto-commit summary. */
+export interface GitNumstatFile {
+  path: string;
+  additions: number;
+  deletions: number;
+  /** git prints `-`/`-` for a binary file: it has a change but no line counts. */
+  binary: boolean;
+}
+
+/** `git diff --cached --numstat` — what is staged right now, one entry per file. */
+export async function stagedNumstat(root: string): Promise<GitNumstatFile[]> {
+  // --no-renames keeps the record shape fixed (a rename would otherwise print its two paths
+  // as extra NUL-terminated fields), which is what lets this stay a three-field parse.
+  const stdout = await mustGit(
+    root,
+    ["diff", "--cached", "--numstat", "--no-renames", "-z"],
+    "Reading the staged diff",
+  );
+  const files: GitNumstatFile[] = [];
+  for (const record of stdout.split("\0")) {
+    if (!record) continue;
+    const [additions = "", deletions = "", ...rest] = record.split("\t");
+    const filePath = rest.join("\t");
+    if (!filePath) continue;
+    const binary = additions === "-" || deletions === "-";
+    files.push({
+      path: filePath,
+      additions: binary ? 0 : Number.parseInt(additions, 10) || 0,
+      deletions: binary ? 0 : Number.parseInt(deletions, 10) || 0,
+      binary,
+    });
+  }
+  return files;
+}
+
+/** What staging the work tree found. */
+export type GitStageWorktreeResult =
+  { staged: true; files: GitNumstatFile[] } | { staged: false; reason: "clean" | "operation" };
+
+/**
+ * Stages the whole work tree and reports what it contained, so the caller can write a message
+ * that describes the commit it is about to make.
+ *
+ * The rails, all deliberate: `-A` so the commit is exactly the tree the user (or the Agent)
+ * left behind, never a subset a timer chose, and `.gitignore` is still honoured. An operation
+ * already in progress is refused outright — staging on top of a conflicted merge is how a
+ * half-resolved tree becomes someone's history.
+ */
+export async function stageWorkTree(root: string): Promise<GitStageWorktreeResult> {
+  if ((await readOperation(root)) !== null) return { staged: false, reason: "operation" };
+  const add = await runGit(root, ["add", "-A"], { timeoutMs: CHECKOUT_TIMEOUT_MS });
+  if (add.code !== 0) throw gitFailure("Staging the work tree", add);
+  // `diff --cached --quiet` exits 1 when something is staged — how git itself says "there is
+  // a commit here" without a second parser for porcelain output.
+  const staged = await runGit(root, ["diff", "--cached", "--quiet"]);
+  if (staged.code === 0) return { staged: false, reason: "clean" };
+  return { staged: true, files: await stagedNumstat(root) };
+}
+
+/**
+ * Commits what is staged. The repository's own hooks run, so a failing pre-commit hook fails
+ * the pass rather than being bypassed; there is no `--amend`, no `--no-verify` and no push.
+ */
+export async function commitStaged(
+  root: string,
+  message: string,
+): Promise<{ sha: string; output: string }> {
+  const commit = await runGit(root, ["commit", "-m", message], { timeoutMs: COMMIT_TIMEOUT_MS });
+  if (commit.code !== 0) throw gitFailure("Committing the work tree", commit);
+  const sha = (await mustGit(root, ["rev-parse", "HEAD"], "Reading the new commit")).trim();
+  return { sha, output: commit.stdout.trim() };
+}
+
+/** How far `alignUpstream` got. Every non-`failed` outcome is a normal, reportable answer. */
+export type GitAlignOutcome =
+  | "up_to_date"
+  | "fast_forwarded"
+  | "merged"
+  | "diverged"
+  | "conflicted"
+  | "no_upstream"
+  | "dirty"
+  | "detached"
+  | "failed";
+
+export interface GitAlignResult {
+  outcome: GitAlignOutcome;
+  upstream: string | null;
+  ahead: number;
+  behind: number;
+  output: string;
+}
+
+/**
+ * Brings the current branch up to date with its upstream, or explains why it did not.
+ *
+ * `fast-forward` never creates a commit, so it cannot conflict or lose anything; it is the
+ * default everywhere this runs. `merge` is for a branch that has genuinely diverged, and a
+ * conflict is aborted immediately: leaving a repository mid-merge would hand the next Agent
+ * turn a tree full of conflict markers it never asked for. Nothing here pushes.
+ */
+export async function alignUpstream(
+  root: string,
+  mode: "fast-forward" | "merge",
+): Promise<GitAlignResult> {
+  const state = await readWorktreeState(root);
+  const base = {
+    upstream: state.upstream,
+    ahead: state.ahead,
+    behind: state.behind,
+  };
+  if (state.detached) return { ...base, outcome: "detached", output: "HEAD is detached." };
+  if (state.upstream === null)
+    return { ...base, outcome: "no_upstream", output: "This branch has no upstream." };
+  if (state.behind === 0)
+    return {
+      ...base,
+      outcome: "up_to_date",
+      output: `Nothing to bring in from ${state.upstream}.`,
+    };
+  if (mode === "fast-forward" && state.ahead > 0) {
+    return {
+      ...base,
+      outcome: "diverged",
+      output: `${state.ahead} local commit(s) and ${state.behind} upstream commit(s): a fast-forward would discard work, and merging is not what this timer asked for.`,
+    };
+  }
+  if (state.trackedChanges.length > 0 || state.conflicted.length > 0) {
+    return {
+      ...base,
+      outcome: "dirty",
+      output: `${state.trackedChanges.length + state.conflicted.length} uncommitted tracked path(s): refusing to merge over them.`,
+    };
+  }
+  const run = await runGit(
+    root,
+    ["merge", ...(mode === "fast-forward" ? ["--ff-only"] : ["--no-edit"]), "@{u}"],
+    { timeoutMs: CHECKOUT_TIMEOUT_MS },
+  );
+  const output = (run.stdout.trim() || run.stderr.trim()).slice(0, MAX_BODY_CHARS);
+  if (run.code === 0) {
+    return {
+      ...base,
+      outcome: mode === "fast-forward" ? "fast_forwarded" : "merged",
+      output,
+    };
+  }
+  if ((await readOperation(root)) === "merge") {
+    // Restore the tree to exactly what it was before the attempt: a timer that leaves a
+    // conflict behind has made the workspace worse than it found it.
+    const abort = await runGit(root, ["merge", "--abort"], { timeoutMs: CHECKOUT_TIMEOUT_MS });
+    const restored = abort.code === 0;
+    return {
+      ...base,
+      outcome: "conflicted",
+      output: `${output}\n\nThe merge was ${restored ? "aborted and the work tree restored" : "left in place (aborting it FAILED — resolve it by hand)"}.`,
+    };
+  }
+  return { ...base, outcome: "failed", output };
+}
+
+/**
+ * Paths that differ between a base revision and HEAD (three-dot: what this branch added since
+ * it forked from the base, i.e. the change set a pull request would carry). `range` is built
+ * by the caller from git's own refs, never from user input.
+ */
+export async function changedPaths(root: string, range: string): Promise<string[]> {
+  const stdout = await mustGit(
+    root,
+    ["diff", "--name-only", "--no-renames", "-z", range],
+    "Reading the changed paths",
+  );
+  return stdout.split("\0").filter(Boolean);
+}
+
+/** Commit subjects in a revision range, newest first, for the "what is waiting to land" part of a report. */
+export async function commitSubjects(
+  root: string,
+  range: string,
+  limit: number,
+): Promise<Array<{ sha: string; subject: string }>> {
+  const stdout = await mustGit(
+    root,
+    ["log", `--max-count=${limit}`, "--no-color", `--pretty=format:%h${FS}%s`, range],
+    "Reading the commits",
+  );
+  return stdout
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => {
+      const [sha = "", subject = ""] = line.split(FS);
+      return { sha, subject };
+    });
 }

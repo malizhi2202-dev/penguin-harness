@@ -358,6 +358,43 @@ period = "12h"
 
 The template's `{{SCHEDULES}}` placeholder expands to `schedules.prompt`: it teaches the model to manage these TOML files with its own file tools (the directory, the field rules, the ~30-second automatic pickup, and the hygiene rules against duplicates), ending with the current task-name list via `{{SCHEDULE_LIST}}`. The prompt is editable on the Schedules tab; with `schedules.enabled` off the block is empty — the server still fires tasks on schedule, the model just isn't taught the task system. An Agent created before this mechanism has no such placeholder in its template; the tab offers one-click insertion.
 
+## Project alignment timers
+
+A Project may declare `timers.toml` in its own directory (`<projectDir>/timers.toml`). Each `[[timer]]` entry periodically aligns the Project's local repositories with their upstreams, checks the documentation against the code, and optionally hands what it found to an Agent. Like Schedules, timers execute only while the Web service is running, and are managed in the right dock's 对齐定时器 panel — the file is hand-editable, and the panel is a view onto it.
+
+The repositories a timer passes over are the ones the Project's Workspaces sit in — exactly the set the Git panel shows. There is no repository list to configure: a Project cannot be pointed at a checkout it never used.
+
+| Field | Required | Description |
+| --- | --- | --- |
+| `name` | yes | Identity within the file; lowercase id |
+| `enabled` | no | Enabled switch; defaults to `false` |
+| `start_at` | yes | First trigger time (ISO 8601) |
+| `period` | no | Cadence such as `30m` / `12h` / `7d`, minimum 5 minutes; omitted means a one-shot |
+| `end_at` | no | End time; must be later than `start_at` |
+| `sync` | no | `none` / `fetch` / `fast-forward` / `merge`; defaults to `fetch` |
+| `commit` | no | `off` / `auto`; defaults to `off` |
+| `docs` | no | Run the documentation / commit / code drift checks; defaults to `true` |
+| `agent_prompt` | no | When set, a run that finds something needing attention sends this Prompt plus the report to a Session |
+| `session_id` | no | Bind that hand-off to an existing Session; mutually exclusive with the three fields below |
+| `workspace` / `provider` / `model_id` | no | New-Session hand-off target (the Project's built-in Agent unless `workspace` says otherwise) |
+
+```toml
+[[timer]]
+name = "git-align"
+enabled = true
+start_at = 2026-08-01T09:00:00Z
+period = "1h"
+sync = "fast-forward"
+commit = "auto"
+agent_prompt = "Fix the documentation drift this report describes."
+```
+
+One run does three things, in this order. It commits the work tree if `commit = "auto"` (the message is generated from the diff, and says so in a trailer). It fetches, then brings the branch up to date by fast-forward, or by merge when `sync = "merge"`. Finally it reports drift: code that changed while no document did, documents that changed while no code did, a changed document whose relative link or code-span path points at nothing (reported as `file:line`), and local commits that have not landed upstream.
+
+The rails are the point of the feature, so they are worth stating plainly. It never force-pushes, never rebases and never rewrites history. A conflicting merge is aborted and reported, leaving the work tree byte-for-byte as it was, rather than leaving a half-merged checkout for someone else to find. A repository with an unfinished git operation (merge, rebase, cherry-pick, revert) is skipped, not "cleaned up". Repositories are walked one at a time, because two passes over one index would race. A due time that has already passed when the server first sees a timer is consumed, never replayed — a restart does not fire yesterday's alignment. A slot is consumed whether or not the pass succeeds, so a failure is reported rather than retried in a loop. `commit = "auto"` is opt-in, a manual run can be a dry run, and the checks themselves are deterministic: no model is consulted, so the same tree always yields the same report.
+
+Known limits, so they are not discovered the hard way. Nothing here talks to a hosting platform: there is no pull-request, review or CI awareness, and "commits that have not landed" (local commits ahead of the upstream) is the local stand-in for a PR's state. The drift checks are pattern-based, not semantic — a document whose meaning quietly stopped matching the code is not detected. And a hand-off is skipped when the bound Session is busy; the next run reports the same findings.
+
 ## Design principle
 
 An Agent's behavior lives entirely in editable files on disk — prompts, Skills, and configuration are data, not code. That is what makes Agents improvable by Agents: an optimizer edits exactly the same files you edit by hand. See [Self-Improvement](/self-improvement) and the [CLI Reference](/cli).
