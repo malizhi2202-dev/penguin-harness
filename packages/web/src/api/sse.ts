@@ -12,7 +12,7 @@
  * Docs: /docs/server-api § "Streaming (SSE)".
  */
 import type { OmniMessage } from "@prismshadow/penguin-core/omnimessage";
-import type { ServerEvent } from "@prismshadow/penguin-server/api";
+import type { ProjectTimerServerEvent, ServerEvent } from "@prismshadow/penguin-server/api";
 
 export interface StreamHandlers {
   /**
@@ -66,7 +66,36 @@ export function openSessionStream(sessionId: string, handlers: StreamHandlers): 
   return subscribe(`/api/sessions/${encodeURIComponent(sessionId)}/stream`, handlers);
 }
 
+/**
+ * Project-level events on the user channel that belong to a surface other than the Session
+ * list, dispatched to whoever subscribed rather than through StreamHandlers. The consumer is
+ * a dock panel, which mounts and unmounts long after the one user-channel connection was
+ * opened (sessions.tsx keeps it for the whole login session), so it cannot own the
+ * EventSource and must not open a second one.
+ */
+const projectTimerRanListeners = new Set<(event: ProjectTimerServerEvent) => void>();
+
+/** Notified when any Project's alignment timer finished a pass; filter on `projectId`. */
+export function subscribeProjectTimerRan(
+  listener: (event: ProjectTimerServerEvent) => void,
+): () => void {
+  projectTimerRanListeners.add(listener);
+  return () => projectTimerRanListeners.delete(listener);
+}
+
+function dispatchProjectEvent(event: ServerEvent): void {
+  if (event.type !== "project_timer_ran") return;
+  // Copied: a listener may unsubscribe from inside its own callback.
+  for (const listener of [...projectTimerRanListeners]) listener(event);
+}
+
 /** Subscribes to the user-level server event stream (GET /api/events; reserved for scheduled-task notifications). */
 export function openUserEvents(handlers: StreamHandlers): StreamConnection {
-  return subscribe("/api/events", handlers);
+  return subscribe("/api/events", {
+    ...handlers,
+    onServerEvent: (event, eventId) => {
+      dispatchProjectEvent(event);
+      handlers.onServerEvent(event, eventId);
+    },
+  });
 }

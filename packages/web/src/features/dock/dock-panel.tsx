@@ -285,6 +285,7 @@ function DockPicker({
         {row("trace")}
         {row("messaging")}
         {row("git")}
+        {row("timers")}
       </div>
     </div>
   );

@@ -19,6 +19,9 @@ const MEMORY_ICON =
 const GIT_ICON =
   "M6 3v12M18 9a9 9 0 0 1-9 9M9 18a3 3 0 1 1-6 0 3 3 0 0 1 6 0M21 6a3 3 0 1 1-6 0 3 3 0 0 1 6 0";
 
+/** Stopwatch: the Alignment timers panel's mark (crown bar, hand, dial). */
+const TIMERS_ICON = "M10 2h4M12 14l3-3M12 22a8 8 0 1 0 0-16 8 8 0 0 0 0 16z";
+
 /** The subagents spawn-tree glyph is multi-element (circles + edges), so it is a component. */
 export function AgentsGlyph({ size = ICON_SIZE.iconButton }: { size?: number }) {
   return (
@@ -56,6 +59,8 @@ export function panelLabel(kind: PanelKind): string {
       return S.messaging.panelTitle;
     case "git":
       return S.git.pageTitle;
+    case "timers":
+      return S.timers.title;
   }
 }
 
@@ -73,5 +78,7 @@ export function panelGlyph(kind: PanelKind, size: number = ICON_SIZE.iconButton)
       return <GlyphIcon d={MESSAGING_ICON} size={size} />;
     case "git":
       return <GlyphIcon d={GIT_ICON} size={size} />;
+    case "timers":
+      return <GlyphIcon d={TIMERS_ICON} size={size} />;
   }
 }

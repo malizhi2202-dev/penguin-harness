@@ -111,6 +111,7 @@ import { SubagentsView } from "./subagents-view";
 import { TracePanel } from "../traces/trace-panel";
 import { MessagingPanel } from "../messaging/messaging-panel";
 import { GitPanel } from "../git/git-page";
+import { TimersPanel } from "../timers/timers-panel";
 import { DockPanel } from "../dock/dock-panel";
 import { useDockMount } from "../dock/use-dock-mount";
 import { panelLabel } from "../dock/panel-meta";
@@ -1555,6 +1556,8 @@ export function ChatPage() {
     // Git is the one Project-scoped body: it answers for the Project's repositories, so it
     // renders on the draft page too instead of the "send a message first" placeholder.
     if (kind === "git") return <GitPanel />;
+    // Alignment timers are Project-scoped for the same reason, and take no session props.
+    if (kind === "timers") return <TimersPanel />;
     if (!selected) return <EmptyState title={panelLabel(kind)} description={S.dock.draftEmpty} />;
     switch (kind) {
       case "agents":

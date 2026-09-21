@@ -97,6 +97,9 @@ import type {
   ProjectUpdateRequest,
   ProjectUpdateResponse,
   ProjectsResponse,
+  ProjectTimerRunRecord,
+  ProjectTimersResponse,
+  ProjectTimersWriteRequest,
   ScheduleItem,
   SchedulesResponse,
   ScheduleUpsertRequest,
@@ -1206,6 +1209,35 @@ export const deleteSchedule = (projectId: string, agentId: string, name: string)
     `/api/projects/${encodeURIComponent(projectId)}/agents/${encodeURIComponent(agentId)}` +
       `/schedules/${encodeURIComponent(name)}`,
     { method: "DELETE" },
+  );
+
+// Project alignment timers (owner writes) ------------------------------------------------------
+
+/** A Project's `timers.toml` whole: the file, each timer's state, and the parser's own messages. */
+export const getProjectTimers = (projectId: string) =>
+  apiFetch<ProjectTimersResponse>(`/api/projects/${encodeURIComponent(projectId)}/timers`);
+
+/**
+ * Replaces the whole file. A 400 means the parser could not interpret it at all; a file that
+ * parses with one bad entry still saves, and that entry's message comes back in `errors`.
+ */
+export const putProjectTimers = (projectId: string, raw: string) =>
+  apiFetch<ProjectTimersResponse>(`/api/projects/${encodeURIComponent(projectId)}/timers`, {
+    method: "PUT",
+    body: { raw } satisfies ProjectTimersWriteRequest,
+  });
+
+/** Runs one timer now; `dryRun` reports without touching the work tree. 409 while a pass is in flight. */
+export const runProjectTimer = (projectId: string, name: string, dryRun: boolean) =>
+  apiFetch<ProjectTimerRunRecord>(
+    `/api/projects/${encodeURIComponent(projectId)}/timers/${encodeURIComponent(name)}/run`,
+    { method: "POST", body: { dryRun } },
+  );
+
+/** One timer's run history, newest first. */
+export const listProjectTimerRuns = (projectId: string, name: string) =>
+  apiFetch<{ runs: ProjectTimerRunRecord[] }>(
+    `/api/projects/${encodeURIComponent(projectId)}/timers/${encodeURIComponent(name)}/runs`,
   );
 
 // Plugin library, and an Agent's installed skills and hook packages ----------------------------
