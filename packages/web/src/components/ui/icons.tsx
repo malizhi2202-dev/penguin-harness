@@ -237,6 +237,12 @@ export const NAV_ICONS = {
     "M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18ZM12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z",
   /** Machines (two stacked server units, each with its own status lamp). */
   machines: "M4 4h16v6H4zM4 14h16v6H4zM7 7h.01M7 17h.01",
+  /**
+   * Git repositories (a branch: a trunk with one commit on it, and a second branch curving off
+   * the trunk). The mark has to say "history that forks" — a plain folder or a cloud would not
+   * distinguish this page from the directory browser.
+   */
+  git: "M6 3v12M18 9a9 9 0 0 1-9 9M9 18a3 3 0 1 1-6 0 3 3 0 0 1 6 0M21 6a3 3 0 1 1-6 0 3 3 0 0 1 6 0",
   usage: "M4 20V10m6 10V4m6 16v-7m4 7H2",
   traces: "M4 6h16M4 12h10M4 18h13",
   /** Benchmark center (a trophy: cup + two handles + base). */

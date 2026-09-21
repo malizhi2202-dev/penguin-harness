@@ -22,6 +22,7 @@ import { ModelsPage } from "./features/models/models-page";
 import { SettingsPage } from "./features/settings/settings-page";
 import { UsagePage } from "./features/usage/usage-page";
 import { BenchmarkPage } from "./features/benchmark/benchmark-page";
+import { GitPage } from "./features/git/git-page";
 import { TerminalPage } from "./features/terminal/terminal-page";
 
 /** Route guard: shows blank while initializing, redirects to /login when not authenticated. */
@@ -108,6 +109,9 @@ export function AppRouter() {
               everyone else, so a member only ever reaches this by typing the URL. */}
           <Route path="/usage" element={<UsagePage />} />
           <Route path="/benchmark" element={<BenchmarkPage />} />
+          {/* Local git repositories, scanned from the Project's Workspaces (the directories its
+              Sessions ran in) plus any directory added by hand on the page itself. */}
+          <Route path="/git" element={<GitPage />} />
           {/* Anything else falls through to the home. */}
           <Route path="*" element={<HomeRoute />} />
         </Route>

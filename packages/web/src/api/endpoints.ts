@@ -48,6 +48,18 @@ import type {
   FeishuTestResponse,
   FilesStatRequest,
   FilesStatResponse,
+  GitCheckoutRequest,
+  GitCommitDetail,
+  GitCommitRequest,
+  GitDiffResponse,
+  GitFetchRequest,
+  GitLogResponse,
+  GitOpResponse,
+  GitPathRequest,
+  GitPushRequest,
+  GitRepoDetail,
+  GitRepoListResponse,
+  GitStageRequest,
   GoalResponse,
   InstallResponse,
   McpServerTestResponse,
@@ -548,6 +560,96 @@ export const listDirectorySkills = (projectId: string, path: string) =>
   apiFetch<DirectorySkillsResponse>(
     `/api/projects/${encodeURIComponent(projectId)}/dir-skills?path=${encodeURIComponent(path)}`,
   );
+
+/**
+ * The Git page: local repositories under the Project's Workspaces. `extra` carries the
+ * directories the sidebar's Workspace registry holds by hand — the server's candidates are the
+ * Session Workspaces it knows about, and those two sets are not the same.
+ */
+export const listGitRepos = (projectId: string, extra: readonly string[] = []) => {
+  const qs = extra.map((p) => `&extra=${encodeURIComponent(p)}`).join("");
+  return apiFetch<GitRepoListResponse>(
+    `/api/projects/${encodeURIComponent(projectId)}/git/repos?${qs.slice(1)}`,
+  );
+};
+
+export const getGitRepo = (projectId: string, path: string) =>
+  apiFetch<GitRepoDetail>(
+    `/api/projects/${encodeURIComponent(projectId)}/git/repo?path=${encodeURIComponent(path)}`,
+  );
+
+export const listGitLog = (
+  projectId: string,
+  path: string,
+  opts: { limit: number; offset: number; ref?: string },
+) => {
+  const qs =
+    `?path=${encodeURIComponent(path)}&limit=${opts.limit}&offset=${opts.offset}` +
+    (opts.ref ? `&ref=${encodeURIComponent(opts.ref)}` : "");
+  return apiFetch<GitLogResponse>(`/api/projects/${encodeURIComponent(projectId)}/git/log${qs}`);
+};
+
+export const getGitCommit = (projectId: string, path: string, ref: string) =>
+  apiFetch<GitCommitDetail>(
+    `/api/projects/${encodeURIComponent(projectId)}/git/commit` +
+      `?path=${encodeURIComponent(path)}&ref=${encodeURIComponent(ref)}`,
+  );
+
+export const getGitDiff = (
+  projectId: string,
+  path: string,
+  opts: { file?: string; staged?: boolean; ref?: string },
+) => {
+  const qs =
+    `?path=${encodeURIComponent(path)}` +
+    (opts.file ? `&file=${encodeURIComponent(opts.file)}` : "") +
+    (opts.staged ? "&staged=1" : "") +
+    (opts.ref ? `&ref=${encodeURIComponent(opts.ref)}` : "");
+  return apiFetch<GitDiffResponse>(`/api/projects/${encodeURIComponent(projectId)}/git/diff${qs}`);
+};
+
+/** The page's write buttons. Each returns what git printed, for the page to show as-is. */
+export const stageGitFiles = (projectId: string, body: GitStageRequest) =>
+  apiFetch<GitOpResponse>(`/api/projects/${encodeURIComponent(projectId)}/git/stage`, {
+    method: "POST",
+    body,
+  });
+
+export const unstageGitFiles = (projectId: string, body: GitStageRequest) =>
+  apiFetch<GitOpResponse>(`/api/projects/${encodeURIComponent(projectId)}/git/unstage`, {
+    method: "POST",
+    body,
+  });
+
+export const commitGit = (projectId: string, body: GitCommitRequest) =>
+  apiFetch<GitOpResponse>(`/api/projects/${encodeURIComponent(projectId)}/git/commit`, {
+    method: "POST",
+    body,
+  });
+
+export const checkoutGitBranch = (projectId: string, body: GitCheckoutRequest) =>
+  apiFetch<GitOpResponse>(`/api/projects/${encodeURIComponent(projectId)}/git/checkout`, {
+    method: "POST",
+    body,
+  });
+
+export const fetchGitRemote = (projectId: string, body: GitFetchRequest) =>
+  apiFetch<GitOpResponse>(`/api/projects/${encodeURIComponent(projectId)}/git/fetch`, {
+    method: "POST",
+    body,
+  });
+
+export const pullGitBranch = (projectId: string, body: GitPathRequest) =>
+  apiFetch<GitOpResponse>(`/api/projects/${encodeURIComponent(projectId)}/git/pull`, {
+    method: "POST",
+    body,
+  });
+
+export const pushGitBranch = (projectId: string, body: GitPushRequest) =>
+  apiFetch<GitOpResponse>(`/api/projects/${encodeURIComponent(projectId)}/git/push`, {
+    method: "POST",
+    body,
+  });
 
 export const createSession = (projectId: string, agentId: string, body: SessionCreateRequest) =>
   apiFetch<SessionCreateResponse>(

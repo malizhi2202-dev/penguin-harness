@@ -3666,3 +3666,191 @@ export interface MachinesResponse {
   imageVersion: string | null;
   job: MachineJob | null;
 }
+
+/**
+ * The Git page: local repositories found under a Project's Workspaces.
+ *
+ * Discovery is by Workspace — the directories the Project's Sessions ran in, plus any directory
+ * the page adds by hand. Each candidate is resolved to its repository top level, so several
+ * Workspaces inside one repository are one row.
+ */
+export interface GitRepoSummary {
+  /** Absolute path of the Workspace this repository was found from. */
+  path: string;
+  /** Absolute path of the repository's top level. */
+  root: string;
+  /** Display name: the repository root's basename. */
+  name: string;
+  /** Branch HEAD is on; null when HEAD is detached. */
+  branch: string | null;
+  detached: boolean;
+  /** HEAD commit; null in a repository that has no commits yet. */
+  head: GitCommit | null;
+  /** Any staged, unstaged, untracked or conflicted path — the row's dot. */
+  dirty: boolean;
+  /** True when the repository has no commits yet (an `init` with nothing in it). */
+  empty: boolean;
+  /** Set when this one repository could not be read; the scan still answers for the others. */
+  error?: string;
+}
+
+/** GET /api/projects/:projectId/git/repos. */
+export interface GitRepoListResponse {
+  repos: GitRepoSummary[];
+  /** Candidates actually resolved (the scan cap). */
+  scanned: number;
+  /** Candidates past the cap, reported rather than silently dropped. */
+  skipped: number;
+}
+
+/** One commit, as the log list and the commit detail both carry it. */
+export interface GitCommit {
+  sha: string;
+  shortSha: string;
+  subject: string;
+  author: { name: string; email: string };
+  /** Author date, ISO 8601 with the author's own offset. */
+  date: string;
+  /** Committer date (differs from `date` after a rebase, an amend or a cherry-pick). */
+  committerDate: string;
+  /** Decoration names, e.g. `HEAD -> dev_mlz`, `origin/dev_mlz`, `v0.4.15`. */
+  refs: string[];
+  parents: string[];
+}
+
+/** One file inside a commit's patch, with the line counts its hunks carry. */
+export interface GitCommitFile {
+  path: string;
+  /** The path it came from, for a rename or a copy. */
+  origPath: string | null;
+  additions: number;
+  deletions: number;
+  binary: boolean;
+}
+
+/** GET /api/projects/:projectId/git/commit. */
+export interface GitCommitDetail extends GitCommit {
+  /** The commit message's body (subject excluded), bounded. */
+  body: string;
+  files: GitCommitFile[];
+  /** The whole patch, bounded by the server's patch cap. */
+  patch: string;
+  patchTruncated: boolean;
+}
+
+/** One entry of `git status --porcelain=v1`: git's own two status letters plus what they mean here. */
+export interface GitStatusFile {
+  path: string;
+  /** The path a rename or a copy came from. */
+  origPath: string | null;
+  /** Index (staged) status letter. */
+  index: string;
+  /** Work tree (unstaged) status letter. */
+  worktree: string;
+  staged: boolean;
+  unstaged: boolean;
+  untracked: boolean;
+  conflicted: boolean;
+}
+
+export interface GitStatusSummary {
+  files: GitStatusFile[];
+  counts: { staged: number; unstaged: number; untracked: number; conflicted: number };
+}
+
+export interface GitBranch {
+  /** Short name (`dev_mlz`, `origin/dev_mlz`). */
+  name: string;
+  sha: string;
+  /** True for a remote-tracking branch. */
+  remote: boolean;
+  /** True for the branch HEAD is on. */
+  current: boolean;
+  /** Upstream of a local branch, as `origin/dev_mlz`; null when it has none. */
+  upstream: string | null;
+  date: string;
+  subject: string;
+}
+
+/** GET /api/projects/:projectId/git/repo. */
+export interface GitRepoDetail {
+  /** Absolute path of the Workspace the page asked about. */
+  path: string;
+  root: string;
+  name: string;
+  branch: string | null;
+  detached: boolean;
+  empty: boolean;
+  head: GitCommit | null;
+  /** Upstream of the current branch, as `origin/dev_mlz`; null when it has none. */
+  upstream: string | null;
+  /** Commits the upstream has that this branch does not. */
+  behind: number;
+  /** Commits this branch has that the upstream does not. */
+  ahead: number;
+  status: GitStatusSummary;
+  branches: GitBranch[];
+  remotes: string[];
+}
+
+/** GET /api/projects/:projectId/git/log. */
+export interface GitLogResponse {
+  commits: GitCommit[];
+  /** Another page is available (the server asks git for one commit more than it returns). */
+  hasMore: boolean;
+}
+
+/** GET /api/projects/:projectId/git/diff. */
+export interface GitDiffResponse {
+  /** Which comparison produced this patch — the page names it in the header. */
+  kind: "staged" | "unstaged" | "untracked" | "commit";
+  path: string | null;
+  origPath: string | null;
+  binary: boolean;
+  patch: string;
+  /** The patch hit the server's cap; the page says so instead of pretending it is whole. */
+  truncated: boolean;
+}
+
+/** Body of the Git page's mutating calls that only name a repository. */
+export interface GitPathRequest {
+  /** Absolute path of a Workspace inside the repository (the same `path` the reads take). */
+  path: string;
+}
+
+/** Body of POST /api/projects/:projectId/git/stage and …/unstage. */
+export interface GitStageRequest extends GitPathRequest {
+  /** Repository-relative paths. */
+  files: string[];
+}
+
+/** Body of POST /api/projects/:projectId/git/commit. */
+export interface GitCommitRequest extends GitPathRequest {
+  message: string;
+  amend?: boolean;
+}
+
+/** Body of POST /api/projects/:projectId/git/checkout. */
+export interface GitCheckoutRequest extends GitPathRequest {
+  /** A branch that already exists in the repository. */
+  branch: string;
+}
+
+/** Body of POST /api/projects/:projectId/git/fetch. */
+export interface GitFetchRequest extends GitPathRequest {
+  /** A remote `git remote` lists; omitted keeps git's own default. */
+  remote?: string;
+}
+
+/** Body of POST /api/projects/:projectId/git/push. */
+export interface GitPushRequest extends GitPathRequest {
+  /** Publish the current branch to the first remote when it has no upstream yet. */
+  setUpstream?: boolean;
+}
+
+/** The mutating calls' answer: what git printed, for the page to show. */
+export interface GitOpResponse {
+  output: string;
+  /** POST …/commit only: the new HEAD. */
+  sha?: string;
+}

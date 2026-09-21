@@ -27,6 +27,7 @@ export const NAV_GROUP_KEYS = [
   "plugins",
   "models",
   "machines",
+  "git",
   "usage",
   "benchmark",
 ] as const;
