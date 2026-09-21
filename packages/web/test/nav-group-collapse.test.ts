@@ -36,14 +36,13 @@ function memStorage(): NavCollapseStorage & { map: Map<string, string> } {
 
 describe("NAV_GROUP_KEYS", () => {
   it("covers exactly the 智能体 → 评估中心 range, in rendered order", () => {
-    // Traces is deliberately absent: the Trace panel moved into the chat toolbar's panel
-    // switcher (features/dock), and /traces stays reachable through its deep links only.
+    // Traces and Git are deliberately absent: both panels live in the chat toolbar's panel
+    // switcher (features/dock), and /traces + /git stay reachable through deep links only.
     expect([...NAV_GROUP_KEYS]).toEqual([
       "agents",
       "plugins",
       "models",
       "machines",
-      "git",
       "usage",
       "benchmark",
     ]);
@@ -73,24 +72,10 @@ describe("navKeysFor", () => {
   it("hides the admin-only entries from a member, and nothing else", () => {
     // /api/machines is admin-gated server-side (it spawns ssh with the server account's
     // keys), so offering a member the row would only ever produce a 403.
-    expect([...navKeysFor(false)]).toEqual([
-      "agents",
-      "plugins",
-      "models",
-      "git",
-      "usage",
-      "benchmark",
-    ]);
+    expect([...navKeysFor(false)]).toEqual(["agents", "plugins", "models", "usage", "benchmark"]);
     // An admin sees the manifest minus what is built but not yet offered — `machines` today,
     // which is why neither answer contains it and the two are equal for now.
-    expect([...navKeysFor(true)]).toEqual([
-      "agents",
-      "plugins",
-      "models",
-      "git",
-      "usage",
-      "benchmark",
-    ]);
+    expect([...navKeysFor(true)]).toEqual(["agents", "plugins", "models", "usage", "benchmark"]);
     expect(NAV_GROUP_KEYS as readonly string[]).toContain("machines");
   });
 });

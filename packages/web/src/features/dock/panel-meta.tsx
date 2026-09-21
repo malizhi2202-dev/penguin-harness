@@ -15,6 +15,10 @@ import type { PanelKind } from "./dock-state";
 const MEMORY_ICON =
   "M4 19.5A2.5 2.5 0 0 1 6.5 17H20M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z";
 
+/** Commit graph: the Git panel's mark (a branch line with a commit and a merge point). */
+const GIT_ICON =
+  "M6 3v12M18 9a9 9 0 0 1-9 9M9 18a3 3 0 1 1-6 0 3 3 0 0 1 6 0M21 6a3 3 0 1 1-6 0 3 3 0 0 1 6 0";
+
 /** The subagents spawn-tree glyph is multi-element (circles + edges), so it is a component. */
 export function AgentsGlyph({ size = ICON_SIZE.iconButton }: { size?: number }) {
   return (
@@ -50,6 +54,8 @@ export function panelLabel(kind: PanelKind): string {
       return S.nav.traces;
     case "messaging":
       return S.messaging.panelTitle;
+    case "git":
+      return S.git.pageTitle;
   }
 }
 
@@ -65,5 +71,7 @@ export function panelGlyph(kind: PanelKind, size: number = ICON_SIZE.iconButton)
       return <GlyphIcon d={NAV_ICONS.traces} size={size} />;
     case "messaging":
       return <GlyphIcon d={MESSAGING_ICON} size={size} />;
+    case "git":
+      return <GlyphIcon d={GIT_ICON} size={size} />;
   }
 }

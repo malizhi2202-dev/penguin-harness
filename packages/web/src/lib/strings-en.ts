@@ -17,7 +17,6 @@ export const en: Strings = {
     plugins: "Plugin library",
     models: "Models",
     machines: "Machines",
-    git: "Repositories",
     usage: "Cost Center",
     traces: "Trajectories",
     benchmark: "Evaluation Center",

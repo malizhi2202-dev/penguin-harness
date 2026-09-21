@@ -20,14 +20,14 @@
  * unit tests) rather than duplicated. Some entries are admin-only (see below), so the
  * sidebar renders navKeysFor(user.isAdmin), not the raw manifest. Traces is deliberately
  * absent: reading a Trace happens in the chat toolbar's panel switcher, which is the only
- * place it happens.
+ * place it happens. Git is absent for the same reason — it is a dock panel beside the
+ * conversation, and `/git` survives only as the deep link to the same body.
  */
 export const NAV_GROUP_KEYS = [
   "agents",
   "plugins",
   "models",
   "machines",
-  "git",
   "usage",
   "benchmark",
 ] as const;

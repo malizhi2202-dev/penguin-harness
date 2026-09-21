@@ -1,12 +1,17 @@
 /**
- * Git page (/git): the local repositories under a Project's Workspaces.
+ * Git: the local repositories under a Project's Workspaces.
  *
- * Two panes. The left is discovery — every Workspace of the Project (the directories its Sessions
- * ran in, which is the server's own candidate list) plus the directories the reader adds here by
- * hand, each resolved to its repository top level so several Workspaces inside one repository are
- * one row. The right is the selected repository: its branch and upstream distance, a toolbar of
- * fetch / pull / push, and three tabs — the commit log (with one commit's patch on demand), the
- * working tree's changes (stage, unstage, commit), and the branches (switch).
+ * One body, two layouts. In the right dock (the panel the chat toolbar opens) the repository list
+ * collapses into a picker in the panel's one header row and everything under it is a single
+ * scrolling column; on `/git` — a deep link kept for the same body — the list is its own card
+ * beside the repository.
+ *
+ * Discovery is the server's: every Workspace of the Project (the directories its Sessions ran in)
+ * plus the directories the reader adds here by hand, each resolved to its repository top level so
+ * several Workspaces inside one repository are one row. The selected repository shows its branch
+ * and upstream distance, a toolbar of fetch / pull / push, and three tabs — the commit log (with
+ * one commit's patch on demand), the working tree's changes (stage, unstage, commit), and the
+ * branches (switch).
  *
  * Nothing here keeps its own model of a repository. Every mutation bumps a nonce and the pane
  * re-reads the server, so what is on screen is what git last said; the only local state that is
@@ -35,6 +40,7 @@ import { ConfirmModal } from "../../components/ui/confirm-modal";
 import { EmptyState } from "../../components/ui/empty-state";
 import { Textarea } from "../../components/ui/input";
 import { SkeletonList } from "../../components/ui/skeleton";
+import { Select } from "../../components/ui/select";
 import { Tabs } from "../../components/ui/tabs";
 import { toastError, toastInfo, toastSuccess } from "../../components/ui/toast";
 import { Truncated } from "../../components/ui/truncated";
@@ -88,15 +94,53 @@ function shortDate(iso: string): string {
   return Number.isNaN(at.getTime()) ? iso : at.toLocaleString();
 }
 
+/** The last segment of a repository-relative path: what a narrow column shows first. */
+function baseName(path: string): string {
+  const slash = path.lastIndexOf("/");
+  return slash === -1 ? path : path.slice(slash + 1);
+}
+
+/** Everything before that segment ("" for a file at the repository root). */
+function dirName(path: string): string {
+  const slash = path.lastIndexOf("/");
+  return slash === -1 ? "" : path.slice(0, slash);
+}
+
+/**
+ * The standalone page (`/git`): the workspace below, with the page's own title block. The route
+ * survives as a deep link even though the entry point is the right dock's Git panel.
+ */
 export function GitPage() {
   useDocumentTitle(S.git.pageTitle);
+  return (
+    <div className="h-full overflow-y-auto p-4 md:p-6">
+      <div className="mx-auto max-w-6xl">
+        <h1 className="text-xl font-semibold">{S.git.pageTitle}</h1>
+        <p className="mt-1 max-w-3xl text-sm text-gray-500 dark:text-gray-400">{S.git.pageDesc}</p>
+        <div className="mt-4">
+          <GitWorkspace variant="page" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The right dock's Git panel body. A dock is a column, not a page: the repository list becomes a
+ * picker in one header row, and everything under it scrolls as one.
+ */
+export function GitPanel() {
+  return <GitWorkspace variant="panel" />;
+}
+
+function GitWorkspace({ variant }: { variant: "page" | "panel" }) {
   const { currentProject } = useProject();
   const projectId = currentProject?.projectId ?? null;
 
   /**
-   * Directories added on this page. Session-lived on purpose: the sidebar's Workspace registry is
-   * a list this page does not own, and writing into it would change the sidebar as a side effect
-   * of browsing here.
+   * Directories added here. Session-lived on purpose: the sidebar's Workspace registry is a list
+   * this surface does not own, and writing into it would change the sidebar as a side effect of
+   * browsing here.
    */
   const [extra, setExtra] = useState<string[]>([]);
   const [nonce, setNonce] = useState(0);
@@ -123,7 +167,7 @@ export function GitPage() {
 
   const repos = data?.repos ?? [];
   // A selection that is gone (deleted, or no longer a repository) falls back to the first row
-  // rather than leaving the right pane empty.
+  // rather than leaving the pane empty.
   const selected = repos.find((r) => r.root === selectedRoot) ?? repos[0] ?? null;
   const reload = useCallback(() => setNonce((n) => n + 1), []);
 
@@ -143,43 +187,46 @@ export function GitPage() {
     setPendingCheck(null);
   }, [pendingCheck, loading, repos]);
 
-  if (projectId === null) {
-    return (
-      <div className="h-full overflow-y-auto p-4 md:p-6">
-        <div className="mx-auto max-w-6xl">
-          <SkeletonList rows={4} />
-        </div>
-      </div>
-    );
-  }
+  if (projectId === null) return <SkeletonList rows={4} />;
 
-  return (
-    <div className="h-full overflow-y-auto p-4 md:p-6">
-      <div className="mx-auto max-w-6xl">
-        <h1 className="text-xl font-semibold">{S.git.pageTitle}</h1>
-        <p className="mt-1 max-w-3xl text-sm text-gray-500 dark:text-gray-400">{S.git.pageDesc}</p>
-        <div className="mt-4 grid items-start gap-4 lg:grid-cols-[18rem_minmax(0,1fr)]">
-          <RepoList
-            repos={repos}
-            loading={loading}
-            error={error}
-            scanned={data?.scanned ?? 0}
-            skipped={data?.skipped ?? 0}
-            selectedRoot={selected?.root ?? null}
-            onSelect={setSelectedRoot}
-            onRescan={reload}
-            onAddDirectory={addDirectory}
-            projectId={projectId}
-          />
+  if (variant === "panel") {
+    return (
+      <div className="flex h-full min-h-0 flex-col">
+        <div className="flex shrink-0 items-center gap-1.5 border-b border-gray-200 px-2 py-1.5 dark:border-gray-800">
+          <Select
+            size="sm"
+            className="min-w-0 flex-1"
+            aria-label={S.git.repos}
+            value={selected?.root ?? ""}
+            onChange={(e) => setSelectedRoot(e.target.value)}
+          >
+            {repos.length === 0 && (
+              <option value="">{loading ? S.git.scanning : S.git.noRepos}</option>
+            )}
+            {repos.map((repo) => (
+              <option key={repo.root} value={repo.root}>
+                {repo.error !== undefined
+                  ? `${repo.name} — ${S.git.readFailed(repo.error)}`
+                  : `${repo.name}${repo.dirty ? " ●" : ""}`}
+              </option>
+            ))}
+          </Select>
+          <Button size="sm" variant="ghost" onClick={reload} disabled={loading}>
+            {S.git.refresh}
+          </Button>
+          <AddDirectoryButton projectId={projectId} onPick={addDirectory} />
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto">
           {selected ? (
             <RepoPane
               key={selected.root}
+              variant="panel"
               projectId={projectId}
               repo={selected}
               onChanged={reload}
             />
           ) : (
-            <div className={`${PANE} p-6`}>
+            <div className="p-4">
               <EmptyState
                 title={loading ? S.git.scanning : S.git.noRepos}
                 description={loading ? undefined : S.git.noReposHint}
@@ -188,7 +235,64 @@ export function GitPage() {
           )}
         </div>
       </div>
+    );
+  }
+
+  return (
+    <div className="grid items-start gap-4 lg:grid-cols-[18rem_minmax(0,1fr)]">
+      <RepoList
+        repos={repos}
+        loading={loading}
+        error={error}
+        scanned={data?.scanned ?? 0}
+        skipped={data?.skipped ?? 0}
+        selectedRoot={selected?.root ?? null}
+        onSelect={setSelectedRoot}
+        onRescan={reload}
+        onAddDirectory={addDirectory}
+        projectId={projectId}
+      />
+      {selected ? (
+        <RepoPane
+          key={selected.root}
+          variant="page"
+          projectId={projectId}
+          repo={selected}
+          onChanged={reload}
+        />
+      ) : (
+        <div className={`${PANE} p-6`}>
+          <EmptyState
+            title={loading ? S.git.scanning : S.git.noRepos}
+            description={loading ? undefined : S.git.noReposHint}
+          />
+        </div>
+      )}
     </div>
+  );
+}
+
+/** 「添加目录」: the shared directory browser, opened from a small button in either layout. */
+function AddDirectoryButton({
+  projectId,
+  onPick,
+}: {
+  projectId: string;
+  onPick: (path: string) => void;
+}) {
+  return (
+    <WorkspaceSelect
+      projectId={projectId}
+      workspace=""
+      onChange={onPick}
+      fieldLabel={S.git.addDirectory}
+      menuHint={S.git.addDirectoryHint}
+      trigger={(_open, toggle) => (
+        <Button size="sm" variant="ghost" onClick={toggle} title={S.git.addDirectory}>
+          {S.git.addDirectory}
+        </Button>
+      )}
+    />
   );
 }
 
@@ -223,18 +327,7 @@ function RepoList({
         <Button size="sm" variant="ghost" onClick={onRescan} disabled={loading}>
           {S.git.refresh}
         </Button>
-        <WorkspaceSelect
-          projectId={projectId}
-          workspace=""
-          onChange={onAddDirectory}
-          fieldLabel={S.git.addDirectory}
-          menuHint={S.git.addDirectoryHint}
-          trigger={(_open, toggle) => (
-            <Button size="sm" variant="ghost" onClick={toggle} title={S.git.addDirectory}>
-              {S.git.addDirectory}
-            </Button>
-          )}
-        />
+        <AddDirectoryButton projectId={projectId} onPick={onAddDirectory} />
       </div>
       {error !== null && (
         <p className="px-2.5 py-2 text-xs text-red-600 dark:text-red-400">{error}</p>
@@ -300,16 +393,21 @@ function RepoList({
 
 type TabKey = "log" | "changes" | "branches";
 
-/** Right pane: the selected repository's header, its toolbar, and the three tabs. */
+/** The selected repository's header, its toolbar, and the three tabs. */
 function RepoPane({
   projectId,
   repo,
+  variant,
   onChanged,
 }: {
   projectId: string;
   repo: GitRepoSummary;
+  /** `page` is a card beside the repository list; `panel` is a dock column, where the picker
+   *  above already names the repository and the pane is the whole width. */
+  variant: "page" | "panel";
   onChanged: () => void;
 }) {
+  const compact = variant === "panel";
   const [tab, setTab] = useState<TabKey>("log");
   const [nonce, setNonce] = useState(0);
   /** The last mutating command's output, shown under the header until the next one. */
@@ -341,12 +439,18 @@ function RepoPane({
   const counts = detail?.status.counts;
 
   return (
-    <div className={`${PANE} min-w-0`}>
-      <div className="border-b border-gray-200 px-3 py-2.5 dark:border-gray-800">
+    <div className={`${compact ? "" : PANE} min-w-0`}>
+      <div
+        className={`border-b border-gray-200 dark:border-gray-800 ${
+          compact ? "px-2 py-2" : "px-3 py-2.5"
+        }`}
+      >
         <div className="flex flex-wrap items-center gap-2">
-          <h2 className="min-w-0 text-base font-semibold">
-            <Truncated text={repo.name} className="max-w-full" />
-          </h2>
+          {!compact && (
+            <h2 className="min-w-0 text-base font-semibold">
+              <Truncated text={repo.name} className="max-w-full" />
+            </h2>
+          )}
           {detail?.branch != null && <Badge tone="brand">{detail.branch}</Badge>}
           {detail?.detached === true && <Badge tone="amber">{S.git.detached}</Badge>}
           {detail?.empty === true && <Badge tone="gray">{S.git.emptyRepo}</Badge>}
@@ -453,6 +557,7 @@ function RepoPane({
             projectId={projectId}
             repo={repo}
             detail={detail}
+            variant={variant}
             onChanged={() => {
               setNonce((n) => n + 1);
               onChanged();
@@ -641,13 +746,18 @@ function ChangesTab({
   projectId,
   repo,
   detail,
+  variant,
   onChanged,
 }: {
   projectId: string;
   repo: GitRepoSummary;
   detail: GitRepoDetail;
+  variant: "page" | "panel";
   onChanged: () => void;
 }) {
+  // The dock is a column of its own width, so the two-column split cannot follow the viewport:
+  // at 1440px the `lg:` breakpoint still matches inside a 400px panel.
+  const compact = variant === "panel";
   const [openFile, setOpenFile] = useState<{ file: GitStatusFile; staged: boolean } | null>(null);
   const [message, setMessage] = useState("");
   const [amend, setAmend] = useState(false);
@@ -668,7 +778,11 @@ function ChangesTab({
   };
 
   return (
-    <div className="grid items-start gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+    <div
+      className={`grid items-start gap-3 ${
+        compact ? "grid-cols-1" : "lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]"
+      }`}
+    >
       <div className="min-w-0">
         <div className="mb-1.5 flex items-center gap-2">
           <h3 className="text-sm font-semibold">{S.git.tabChanges}</h3>
@@ -711,84 +825,117 @@ function ChangesTab({
                 openFile.file.path === file.path &&
                 openFile.staged === file.staged;
               return (
-                <li key={file.path} className="flex items-center gap-1">
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setOpenFile(
-                        active ? null : { file, staged: file.untracked ? false : file.staged },
-                      )
-                    }
-                    title={file.path}
-                    className={`${ROW} min-w-0 flex-1 ${
-                      active
-                        ? "bg-gray-100 dark:bg-gray-800"
-                        : "hover:bg-gray-50 dark:hover:bg-gray-800/60"
-                    }`}
-                  >
-                    <span className="min-w-0 flex-1">
-                      <Truncated text={file.path} className="block font-mono text-xs" />
-                      <span className="mt-0.5 block text-xs text-gray-500 dark:text-gray-400">
-                        {label}
-                        {file.origPath !== null ? ` ← ${file.origPath}` : ""}
-                      </span>
-                    </span>
-                    <span
-                      className={`shrink-0 font-mono text-xs ${
-                        file.conflicted
-                          ? toneInk.danger
-                          : file.staged
-                            ? toneInk.success
-                            : toneInk.attention
+                /* A dock column has no room for a second, sticky column, so the diff opens
+                   under the row that asked for it — the reader keeps the list in view instead
+                   of scrolling to a pane far below the fold. */
+                <li key={file.path} className={compact ? "block" : "flex items-center gap-1"}>
+                  <div className={compact ? "flex items-center gap-1" : "contents"}>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setOpenFile(
+                          active ? null : { file, staged: file.untracked ? false : file.staged },
+                        )
+                      }
+                      title={file.path}
+                      className={`${ROW} min-w-0 flex-1 ${
+                        active
+                          ? "bg-gray-100 dark:bg-gray-800"
+                          : "hover:bg-gray-50 dark:hover:bg-gray-800/60"
                       }`}
                     >
-                      {file.index}
-                      {file.worktree}
-                    </span>
-                  </button>
-                  {!file.untracked && !file.conflicted && (
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      disabled={busy}
-                      title={file.staged ? S.git.unstage : S.git.stage}
-                      onClick={() =>
-                        void run(
-                          () =>
-                            file.staged
-                              ? api.unstageGitFiles(projectId, {
-                                  path: repo.path,
-                                  files: [file.path],
-                                })
-                              : api.stageGitFiles(projectId, {
-                                  path: repo.path,
-                                  files: [file.path],
-                                }),
-                          file.staged ? S.git.unstage : S.git.stage,
-                        )
-                      }
-                    >
-                      {file.staged ? S.git.unstage : S.git.stage}
-                    </Button>
-                  )}
-                  {file.untracked && (
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      disabled={busy}
-                      onClick={() =>
-                        void run(
-                          () =>
-                            api.stageGitFiles(projectId, {
-                              path: repo.path,
-                              files: [file.path],
-                            }),
-                          S.git.stage,
-                        )
-                      }
-                    >
-                      {S.git.stage}
-                    </Button>
+                      <span className="min-w-0 flex-1">
+                        {compact ? (
+                          /* A dock column truncates a full path to nothing useful, and two files
+                           under one directory then read alike: the name first, its directory
+                           dimmed after it, both with the hover tooltip Truncated adds. */
+                          <span className="flex min-w-0 items-baseline gap-1.5">
+                            <Truncated
+                              text={baseName(file.path)}
+                              className="shrink font-mono text-xs"
+                            />
+                            {dirName(file.path) !== "" && (
+                              <Truncated
+                                text={dirName(file.path)}
+                                className="min-w-0 flex-1 font-mono text-xs text-gray-500 dark:text-gray-400"
+                              />
+                            )}
+                          </span>
+                        ) : (
+                          <Truncated text={file.path} className="block font-mono text-xs" />
+                        )}
+                        <span className="mt-0.5 block text-xs text-gray-500 dark:text-gray-400">
+                          {label}
+                          {file.origPath !== null ? ` ← ${file.origPath}` : ""}
+                        </span>
+                      </span>
+                      <span
+                        className={`shrink-0 font-mono text-xs ${
+                          file.conflicted
+                            ? toneInk.danger
+                            : file.staged
+                              ? toneInk.success
+                              : toneInk.attention
+                        }`}
+                      >
+                        {file.index}
+                        {file.worktree}
+                      </span>
+                    </button>
+                    {!file.untracked && !file.conflicted && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        disabled={busy}
+                        title={file.staged ? S.git.unstage : S.git.stage}
+                        onClick={() =>
+                          void run(
+                            () =>
+                              file.staged
+                                ? api.unstageGitFiles(projectId, {
+                                    path: repo.path,
+                                    files: [file.path],
+                                  })
+                                : api.stageGitFiles(projectId, {
+                                    path: repo.path,
+                                    files: [file.path],
+                                  }),
+                            file.staged ? S.git.unstage : S.git.stage,
+                          )
+                        }
+                      >
+                        {file.staged ? S.git.unstage : S.git.stage}
+                      </Button>
+                    )}
+                    {file.untracked && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        disabled={busy}
+                        onClick={() =>
+                          void run(
+                            () =>
+                              api.stageGitFiles(projectId, {
+                                path: repo.path,
+                                files: [file.path],
+                              }),
+                            S.git.stage,
+                          )
+                        }
+                      >
+                        {S.git.stage}
+                      </Button>
+                    )}
+                  </div>
+                  {compact && active && (
+                    <div className="mt-1.5">
+                      <FileDiff
+                        projectId={projectId}
+                        repo={repo}
+                        file={file}
+                        staged={file.untracked ? false : file.staged}
+                      />
+                    </div>
                   )}
                 </li>
               );
@@ -836,19 +983,22 @@ function ChangesTab({
       </div>
 
       {/* Sticky so a file picked far down a long change list still opens where the reader is
-          looking, instead of at the top of a column they have already scrolled past. */}
-      <div className="min-w-0 lg:sticky lg:top-4">
-        {openFile === null ? (
-          <p className="text-xs text-gray-500 dark:text-gray-400">{S.git.selectFile}</p>
-        ) : (
-          <FileDiff
-            projectId={projectId}
-            repo={repo}
-            file={openFile.file}
-            staged={openFile.staged}
-          />
-        )}
-      </div>
+          looking, instead of at the top of a column they have already scrolled past. A dock
+          column has no second column to stick beside: its diff opens inside the row. */}
+      {!compact && (
+        <div className="min-w-0 lg:sticky lg:top-4">
+          {openFile === null ? (
+            <p className="text-xs text-gray-500 dark:text-gray-400">{S.git.selectFile}</p>
+          ) : (
+            <FileDiff
+              projectId={projectId}
+              repo={repo}
+              file={openFile.file}
+              staged={openFile.staged}
+            />
+          )}
+        </div>
+      )}
     </div>
   );
 }

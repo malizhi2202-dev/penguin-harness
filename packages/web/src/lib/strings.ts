@@ -21,7 +21,6 @@ export const zh = {
     plugins: "插件库",
     models: "模型库",
     machines: "机器",
-    git: "代码仓库",
     usage: "成本中心",
     traces: "轨迹观测",
     benchmark: "评估中心",
