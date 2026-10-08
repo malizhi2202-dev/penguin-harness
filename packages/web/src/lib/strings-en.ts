@@ -2419,6 +2419,7 @@ Scenarios:
       "Create a robot in Tuitui and take its App ID and App Secret",
       "Fill both into the form above, and type the host name the platform gives you (no https://, no path, no port)",
       "Save, then enable the connection — connecting is subscribing: one long connection carries every conversation the robot takes part in",
+      "If the robot carries a group restriction, set that group to “*” (all groups) — a group outside it pushes nothing",
       "Message the robot in Tuitui; in a group, @ it",
     ],
   },
